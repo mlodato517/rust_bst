@@ -9,44 +9,120 @@
 
 use std::cmp;
 
-/// A `Node` tree has a key that is used for searching/sorting and a value
-/// that is associated with that key. It always has two children although
-/// those children may be [`Leaf`][Tree::Leaf]s.
+/// A `Node` has a key that is used for searching/sorting and a value
+/// that is associated with that key. Either of its children may be
+/// present or absent.
 #[derive(Clone)]
-pub struct Node<K, V> {
+struct Node<K, V> {
     key: K,
     value: V,
-    left: Box<Tree<K, V>>,
-    right: Box<Tree<K, V>>,
+    left: Option<Box<Node<K, V>>>,
+    right: Option<Box<Node<K, V>>>,
 }
 
 impl<K, V> Node<K, V> {
+    /// Creates a new `Node` with the given key and value
+    /// and no children
     fn new(key: K, value: V) -> Self {
         Self {
             key,
             value,
-            left: Box::new(Tree::Leaf),
-            right: Box::new(Tree::Leaf),
+            left: None,
+            right: None,
         }
     }
 
-    /// Returns the largest node and a new subtree
+    /// Returns the largest node in this subtree and a new subtree
     /// without that largest node.
-    fn delete_largest(self) -> (K, V, Box<Tree<K, V>>)
+    fn delete_largest(self) -> (K, V, Option<Box<Self>>)
     where
         K: cmp::Ord,
     {
-        match *self.right {
-            Tree::Leaf => (self.key, self.value, self.left),
-            Tree::Node(r) => {
-                let (key, value, sub) = r.delete_largest();
+        match self.right {
+            None => (self.key, self.value, self.left),
+            Some(right) => {
+                let (k, v, sub) = right.delete_largest();
 
-                (
-                    key,
-                    value,
-                    Box::new(Tree::Node(Node { right: sub, ..self })),
-                )
+                (k, v, Some(Box::new(Self { right: sub, ..self })))
             }
+        }
+    }
+
+    /// Returns a new `Node` whose subtree contains a `Node`
+    /// with the given key and value.
+    fn insert(self, key: K, value: V) -> Self
+    where
+        K: cmp::Ord,
+    {
+        match key.cmp(&self.key) {
+            cmp::Ordering::Less => Self {
+                left: match self.left {
+                    None => Some(Box::new(Self::new(key, value))),
+                    Some(left) => Some(Box::new(left.insert(key, value))),
+                },
+                ..self
+            },
+            cmp::Ordering::Equal => Self { value, ..self },
+            cmp::Ordering::Greater => Self {
+                right: match self.right {
+                    None => Some(Box::new(Self::new(key, value))),
+                    Some(right) => Some(Box::new(right.insert(key, value))),
+                },
+                ..self
+            },
+        }
+    }
+
+    /// Potentially finds the value associated with the given key
+    /// in this `Node`. If no node has the corresponding key, `None`
+    /// is returned.
+    fn find(&self, k: &K) -> Option<&V>
+    where
+        K: cmp::Ord,
+    {
+        match k.cmp(&self.key) {
+            cmp::Ordering::Less => self.left.as_ref().and_then(|left| left.find(k)),
+            cmp::Ordering::Equal => Some(&self.value),
+            cmp::Ordering::Greater => self.right.as_ref().and_then(|right| right.find(k)),
+        }
+    }
+
+    /// Returns a new `Node` without a node with the given key.
+    /// If the subtree contained a node with the key, it is removed.
+    /// If the subtree never contained a node with the key, a new
+    /// subtree is constructed that is identical to the previous.
+    fn delete(self, k: &K) -> Option<Self>
+    where
+        K: cmp::Ord,
+    {
+        match k.cmp(&self.key) {
+            cmp::Ordering::Less => Some(Self {
+                left: self.left.and_then(|left| left.delete(k).map(Box::new)),
+                ..self
+            }),
+            cmp::Ordering::Equal => match (self.left, self.right) {
+                (None, None) => None,
+                (None, Some(right)) => Some(*right),
+                (Some(left), None) => Some(*left),
+
+                // If we have two children we have to figure out
+                // which node to promote. We choose here this node's
+                // predecessor. That is, the largest node in this node's
+                // left subtree.
+                (Some(left_child), right_child) => {
+                    let (pred_key, pred_value, new_left) = left_child.delete_largest();
+                    Some(Self {
+                        left: new_left,
+                        right: right_child,
+                        key: pred_key,
+                        value: pred_value,
+                    })
+                }
+            },
+            cmp::Ordering::Greater => Some(Self {
+                right: self.right.and_then(|right| right.delete(k).map(Box::new)),
+                ..self
+            }),
         }
     }
 }
@@ -56,13 +132,7 @@ impl<K, V> Node<K, V> {
 /// functional - operations that would modify the tree instead
 /// return a new tree.
 #[derive(Clone)]
-pub enum Tree<K, V> {
-    /// A marker for the empty pointer at the bottom of a subtree.
-    Leaf,
-    /// A `Node` that has a key, value, and two children (which are
-    /// both `Tree`s). This enum trivially wraps the [`Node`] struct.
-    Node(Node<K, V>),
-}
+pub struct Tree<K, V>(Option<Node<K, V>>);
 
 impl<K, V> Default for Tree<K, V> {
     fn default() -> Self {
@@ -73,7 +143,7 @@ impl<K, V> Default for Tree<K, V> {
 impl<K, V> Tree<K, V> {
     /// Generates a new, empty `Tree`.
     pub fn new() -> Self {
-        Tree::Leaf
+        Self(None)
     }
 
     /// Returns a new tree that includes a node
@@ -97,19 +167,9 @@ impl<K, V> Tree<K, V> {
     where
         K: cmp::Ord,
     {
-        match self {
-            Tree::Leaf => Tree::Node(Node::new(key, value)),
-            Tree::Node(n) => match key.cmp(&n.key) {
-                cmp::Ordering::Less => Tree::Node(Node {
-                    left: Box::new(n.left.insert(key, value)),
-                    ..n
-                }),
-                cmp::Ordering::Equal => Tree::Node(Node { value, ..n }),
-                cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Box::new(n.right.insert(key, value)),
-                    ..n
-                }),
-            },
+        match self.0 {
+            None => Self(Some(Node::new(key, value))),
+            Some(root) => Self(Some(root.insert(key, value))),
         }
     }
 
@@ -135,14 +195,7 @@ impl<K, V> Tree<K, V> {
     where
         K: cmp::Ord,
     {
-        match self {
-            Tree::Leaf => None,
-            Tree::Node(n) => match k.cmp(&n.key) {
-                cmp::Ordering::Less => n.left.find(k),
-                cmp::Ordering::Equal => Some(&n.value),
-                cmp::Ordering::Greater => n.right.find(k),
-            },
-        }
+        self.0.as_ref().and_then(|root| root.find(k))
     }
 
     /// Returns a new tree without a node with the given key.
@@ -166,37 +219,7 @@ impl<K, V> Tree<K, V> {
     where
         K: cmp::Ord,
     {
-        match self {
-            Tree::Leaf => self,
-            Tree::Node(n) => match k.cmp(&n.key) {
-                cmp::Ordering::Less => Tree::Node(Node {
-                    left: Box::new(n.left.delete(k)),
-                    ..n
-                }),
-                cmp::Ordering::Equal => match (*n.left, *n.right) {
-                    (Tree::Leaf, right_child) => right_child,
-                    (left_child, Tree::Leaf) => left_child,
-
-                    // If we have two children we have to figure out
-                    // which node to promote. We choose here this node's
-                    // predecessor. That is, the largest node in this node's
-                    // left subtree.
-                    (Tree::Node(left_child), right_child) => {
-                        let (pred_key, pred_val, new_left) = left_child.delete_largest();
-                        Tree::Node(Node {
-                            left: new_left,
-                            right: Box::new(right_child), // I really don't want this allocation here
-                            key: pred_key,
-                            value: pred_val,
-                        })
-                    }
-                },
-                cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Box::new(n.right.delete(k)),
-                    ..n
-                }),
-            },
-        }
+        Self(self.0.and_then(|root| root.delete(k)))
     }
 }
 
