@@ -1,5 +1,17 @@
+//! A Functional BST. This is modeled after a BST one would see in
+//! a functional language like Haskell. Any operations that one would
+//! expect to modify the tree (e.g. `insert` or `delete`) instead return
+//! a new tree that reference many of the nodes of the original tree.
+//!
+//! To avoid copious `Rc`ing, we do not implement a particularly efficient
+//! persistent structure - we only allow one tree at a time. Still, most
+//! of the algorithms are the same and there are useful lessons to learn!
+
 use std::cmp;
 
+/// A `Node` tree has a key that is used for searching/sorting and a value
+/// that is associated with that key. It always has two children although
+/// those children may be [`Leaf`]s.
 pub struct Node<K, V> {
     key: K,
     value: V,
@@ -39,7 +51,10 @@ impl<K, V> Node<K, V> {
 /// functional - operations that would modify the tree instead
 /// return a new tree.
 pub enum Tree<K, V> {
+    /// A marker for the empty pointer at the bottom of a subtree.
     Leaf,
+    /// A `Node` that has a key, value, and two children (which are
+    /// both `Tree`s). This enum trivially wraps the [`Node`] struct.
     Node(Node<K, V>),
 }
 
@@ -50,6 +65,7 @@ impl<K, V> Default for Tree<K, V> {
 }
 
 impl<K, V> Tree<K, V> {
+    /// Generates a new, empty `Tree`.
     pub fn new() -> Self {
         Tree::Leaf
     }
