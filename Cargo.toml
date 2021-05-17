@@ -9,5 +9,10 @@ edition = "2018"
 [dependencies]
 
 [dev-dependencies]
+criterion = { version = "0.3", features = ["html_reports"] }
 quickcheck = "1"
 quickcheck_macros = "1"
+
+[[bench]]
+name = "functional"
+harness = false

@@ -12,6 +12,7 @@ use std::cmp;
 /// A `Node` tree has a key that is used for searching/sorting and a value
 /// that is associated with that key. It always has two children although
 /// those children may be [`Leaf`][Tree::Leaf]s.
+#[derive(Clone)]
 pub struct Node<K, V> {
     key: K,
     value: V,
@@ -54,6 +55,7 @@ impl<K, V> Node<K, V> {
 /// and deleting keys and values. Note that this data structure is
 /// functional - operations that would modify the tree instead
 /// return a new tree.
+#[derive(Clone)]
 pub enum Tree<K, V> {
     /// A marker for the empty pointer at the bottom of a subtree.
     Leaf,
