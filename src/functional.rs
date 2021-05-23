@@ -11,7 +11,7 @@ use std::cmp;
 
 /// A `Node` tree has a key that is used for searching/sorting and a value
 /// that is associated with that key. It always has two children although
-/// those children may be [`Leaf`]s.
+/// those children may be [`Leaf`][Tree::Leaf]s.
 pub struct Node<K, V> {
     key: K,
     value: V,
