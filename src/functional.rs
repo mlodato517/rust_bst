@@ -265,3 +265,90 @@ mod tests {
 
     // TODO Test BST invariant
 }
+
+#[cfg(test)]
+mod quicktests {
+    use super::*;
+    use crate::test::quick::{Large, Op};
+    use std::collections::{HashMap, HashSet};
+
+    fn do_ops<K, V>(ops: &[Op<K, V>], mut bst: Tree<K, V>, map: &mut HashMap<K, V>) -> Tree<K, V>
+    where
+        K: std::hash::Hash + Eq + Clone + Ord,
+        V: std::fmt::Debug + PartialEq + Clone,
+    {
+        for op in ops {
+            match op {
+                Op::Insert(k, v) => {
+                    bst = bst.insert(k.clone(), v.clone());
+                    map.insert(k.clone(), v.clone());
+                }
+                Op::Remove(k) => {
+                    bst = bst.delete(k);
+                    map.remove(k);
+                }
+                Op::CheckGet(k) => {
+                    assert_eq!(bst.find(k), map.get(k));
+                }
+            }
+        }
+
+        bst
+    }
+
+    fn assert_maps_equivalent<K, V>(bst: &Tree<K, V>, map: &HashMap<K, V>) -> bool
+    where
+        K: std::hash::Hash + Eq + Clone + Ord,
+        V: std::fmt::Debug + PartialEq,
+    {
+        for key in map.keys() {
+            assert_eq!(bst.find(key), map.get(key));
+        }
+        true
+    }
+
+    #[quickcheck]
+    fn fuzz_multiple_operations_i8(ops: Large<Vec<Op<i8, i8>>>) -> bool {
+        let mut tree = Tree::new();
+        let mut map = HashMap::new();
+
+        tree = do_ops(&ops, tree, &mut map);
+        assert_maps_equivalent(&tree, &map)
+    }
+
+    #[quickcheck]
+    fn contains(xs: Vec<i8>) -> bool {
+        let mut tree = Tree::new();
+        for x in &xs {
+            tree = tree.insert(*x, *x);
+        }
+
+        xs.iter().all(|x| tree.find(x) == Some(&x))
+    }
+
+    #[quickcheck]
+    fn contains_not(xs: Vec<i8>, nots: Vec<i8>) -> bool {
+        let mut tree = Tree::new();
+        for x in &xs {
+            tree = tree.insert(*x, *x);
+        }
+        let added: HashSet<_> = xs.into_iter().collect();
+        let nots: HashSet<_> = nots.into_iter().collect();
+        let mut nots = nots.difference(&added);
+
+        nots.all(|x| tree.find(x) == None)
+    }
+
+    #[quickcheck]
+    fn with_deletions(xs: Vec<i8>, deletes: Vec<i8>) -> bool {
+        let mut tree = Tree::new();
+        for x in &xs {
+            tree = tree.insert(*x, *x);
+        }
+        for delete in &deletes {
+            tree = tree.delete(&delete);
+        }
+
+        deletes.iter().all(|x| tree.find(x) == None)
+    }
+}

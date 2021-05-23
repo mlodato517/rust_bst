@@ -27,3 +27,10 @@
 #![deny(missing_docs)]
 
 pub mod functional;
+
+#[cfg(test)]
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
+#[cfg(test)]
+mod test;
