@@ -81,11 +81,11 @@ impl<K, V> Tree<K, V> {
     /// let mut tree = Tree::new();
     /// tree = tree.insert(1, 2);
     ///
-    /// assert_eq!(tree.find(1), Some(&2));
+    /// assert_eq!(tree.find(&1), Some(&2));
     ///
     /// tree = tree.insert(1, 3);
     ///
-    /// assert_eq!(tree.find(1), Some(&3));
+    /// assert_eq!(tree.find(&1), Some(&3));
     /// ```
     pub fn insert(self, key: K, value: V) -> Self
     where
@@ -121,11 +121,11 @@ impl<K, V> Tree<K, V> {
     /// tree = tree.insert(2, 3);
     /// tree = tree.insert(0, 1);
     ///
-    /// assert_eq!(tree.find(1), Some(&2));
-    /// assert_eq!(tree.find(2), Some(&3));
-    /// assert_eq!(tree.find(0), Some(&1));
+    /// assert_eq!(tree.find(&1), Some(&2));
+    /// assert_eq!(tree.find(&2), Some(&3));
+    /// assert_eq!(tree.find(&0), Some(&1));
     /// ```
-    pub fn find(&self, k: K) -> Option<&V>
+    pub fn find(&self, k: &K) -> Option<&V>
     where
         K: cmp::Ord,
     {
@@ -152,11 +152,11 @@ impl<K, V> Tree<K, V> {
     /// let mut tree = Tree::new();
     /// tree = tree.insert(1, 2);
     ///
-    /// tree = tree.delete(1);
+    /// tree = tree.delete(&1);
     ///
-    /// assert_eq!(tree.find(1), None);
+    /// assert_eq!(tree.find(&1), None);
     /// ```
-    pub fn delete(self, k: K) -> Self
+    pub fn delete(self, k: &K) -> Self
     where
         K: cmp::Ord,
     {
@@ -202,10 +202,10 @@ mod tests {
         let mut tree = Tree::new();
         tree = tree.insert(1, 2);
         tree = tree.insert(2, 3);
-        tree = tree.delete(2);
+        tree = tree.delete(&2);
 
-        assert_eq!(tree.find(1), Some(&2));
-        assert_eq!(tree.find(2), None);
+        assert_eq!(tree.find(&1), Some(&2));
+        assert_eq!(tree.find(&2), None);
     }
 
     #[test]
@@ -213,10 +213,10 @@ mod tests {
         let mut tree = Tree::new();
         tree = tree.insert(1, 2);
         tree = tree.insert(2, 3);
-        tree = tree.delete(1);
+        tree = tree.delete(&1);
 
-        assert_eq!(tree.find(1), None);
-        assert_eq!(tree.find(2), Some(&3));
+        assert_eq!(tree.find(&1), None);
+        assert_eq!(tree.find(&2), Some(&3));
     }
 
     #[test]
@@ -224,10 +224,10 @@ mod tests {
         let mut tree = Tree::new();
         tree = tree.insert(2, 3);
         tree = tree.insert(1, 2);
-        tree = tree.delete(2);
+        tree = tree.delete(&2);
 
-        assert_eq!(tree.find(1), Some(&2));
-        assert_eq!(tree.find(2), None);
+        assert_eq!(tree.find(&1), Some(&2));
+        assert_eq!(tree.find(&2), None);
     }
 
     #[test]
@@ -236,11 +236,11 @@ mod tests {
         tree = tree.insert(2, 3);
         tree = tree.insert(1, 2);
         tree = tree.insert(3, 4);
-        tree = tree.delete(2);
+        tree = tree.delete(&2);
 
-        assert_eq!(tree.find(1), Some(&2));
-        assert_eq!(tree.find(2), None);
-        assert_eq!(tree.find(3), Some(&4));
+        assert_eq!(tree.find(&1), Some(&2));
+        assert_eq!(tree.find(&2), None);
+        assert_eq!(tree.find(&3), Some(&4));
     }
 
     #[test]
@@ -250,12 +250,12 @@ mod tests {
         tree = tree.insert(1, 2);
         tree = tree.insert(0, 1);
         tree = tree.insert(3, 4);
-        tree = tree.delete(2);
+        tree = tree.delete(&2);
 
-        assert_eq!(tree.find(0), Some(&1));
-        assert_eq!(tree.find(1), Some(&2));
-        assert_eq!(tree.find(2), None);
-        assert_eq!(tree.find(3), Some(&4));
+        assert_eq!(tree.find(&0), Some(&1));
+        assert_eq!(tree.find(&1), Some(&2));
+        assert_eq!(tree.find(&2), None);
+        assert_eq!(tree.find(&3), Some(&4));
     }
 
     // TODO Test BST invariant
