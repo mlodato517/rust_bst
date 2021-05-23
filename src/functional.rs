@@ -31,16 +31,20 @@ impl<K, V> Node<K, V> {
 
     /// Returns the largest node and a new subtree
     /// without that largest node.
-    fn delete_largest(self) -> (Self, Box<Tree<K, V>>)
+    fn delete_largest(self) -> (K, V, Box<Tree<K, V>>)
     where
         K: cmp::Ord,
     {
         match *self.right {
-            Tree::Leaf => (Node::new(self.key, self.value), self.left),
+            Tree::Leaf => (self.key, self.value, self.left),
             Tree::Node(r) => {
-                let (node, sub) = r.delete_largest();
+                let (key, value, sub) = r.delete_largest();
 
-                (node, Box::new(Tree::Node(Node { right: sub, ..self })))
+                (
+                    key,
+                    value,
+                    Box::new(Tree::Node(Node { right: sub, ..self })),
+                )
             }
         }
     }
@@ -176,11 +180,12 @@ impl<K, V> Tree<K, V> {
                     // predecessor. That is, the largest node in this node's
                     // left subtree.
                     (Tree::Node(left_child), right_child) => {
-                        let (predecessor, new_left) = left_child.delete_largest();
+                        let (pred_key, pred_val, new_left) = left_child.delete_largest();
                         Tree::Node(Node {
                             left: new_left,
                             right: Box::new(right_child), // I really don't want this allocation here
-                            ..predecessor
+                            key: pred_key,
+                            value: pred_val,
                         })
                     }
                 },
