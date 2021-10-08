@@ -1,5 +1,5 @@
 [package]
-name = "avl_tree"
+name = "bst"
 version = "0.1.0"
 authors = ["mark"]
 edition = "2018"
