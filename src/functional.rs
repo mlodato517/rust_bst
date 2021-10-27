@@ -173,13 +173,16 @@ impl<K, V> Tree<K, V> {
                     (Tree::Node(left_child), _) => {
                         let (pred_key, pred_val, new_left) = left_child.delete_largest();
                         let height = new_left.height().max(n.right.height()) + 1;
-                        Tree::Node(Node {
-                            height,
-                            key: pred_key,
-                            left: new_left,
-                            right: Rc::clone(&n.right),
-                            value: pred_val,
-                        })
+                        Tree::Node(
+                            Node {
+                                height,
+                                key: pred_key,
+                                left: new_left,
+                                right: Rc::clone(&n.right),
+                                value: pred_val,
+                            }
+                            .balance(),
+                        )
                     }
                 },
                 cmp::Ordering::Greater => {
@@ -253,6 +256,7 @@ impl<K, V> Node<K, V> {
             right: right_child,
             value: Rc::clone(&self.value),
         }
+        .balance()
     }
 
     /// Returns the key and value of the largest node and a new subtree without that largest node.
@@ -278,6 +282,84 @@ impl<K, V> Node<K, V> {
                 )
             }
         }
+    }
+
+    /// Returns a new tree by rotating the right child up to become the root. To maintain the AVL
+    /// invariant, we lift the right child's left child to be the new left child's right child.
+    fn rotate_left(&self) -> Self {
+        let old_root = self;
+        match &*old_root.right {
+            // We can't come into this method without a right child since we only rotate left if
+            // the right subtree is taller than the left subtree.
+            Tree::Leaf => unreachable!("`balance` saw right child taller than left child."),
+            Tree::Node(new_root) => {
+                // The old root will be come the left child of the new root. It's left child stays
+                // the same and its right child is the left child of the new root (since the new
+                // root's left child is changing to be this node).
+                let new_left = Tree::Node(Self {
+                    height: old_root.left.height().max(new_root.left.height()) + 1,
+                    key: Rc::clone(&old_root.key),
+                    left: Rc::clone(&old_root.left),
+                    right: Rc::clone(&new_root.left),
+                    value: Rc::clone(&old_root.value),
+                });
+
+                Self {
+                    height: new_root.right.height().max(new_left.height()) + 1,
+                    key: Rc::clone(&new_root.key),
+                    left: Rc::new(new_left),
+                    right: Rc::clone(&new_root.right),
+                    value: Rc::clone(&new_root.value),
+                }
+            }
+        }
+    }
+
+    /// Returns a new tree by rotating the left child up to become the root. To maintain the AVL
+    /// invariant, we lift the left child's right child to be the new right child's left child.
+    fn rotate_right(&self) -> Self {
+        match self.left.as_ref() {
+            Tree::Leaf => self.clone(),
+            Tree::Node(l) => {
+                let new_right = Tree::Node(Self {
+                    height: self.right.height().max(l.right.height()) + 1,
+                    key: Rc::clone(&self.key),
+                    left: Rc::clone(&l.right),
+                    right: Rc::clone(&self.right),
+                    value: Rc::clone(&self.value),
+                });
+
+                Self {
+                    height: l.left.height().max(new_right.height()) + 1,
+                    key: Rc::clone(&l.key),
+                    left: Rc::clone(&l.left),
+                    right: Rc::new(new_right),
+                    value: Rc::clone(&l.value),
+                }
+            }
+        }
+    }
+
+    /// Balances a tree using the heights of the children.
+    ///
+    /// **Note** This takes `self` instead of `&self` might not be very functional but it's private,
+    /// isn't `mut` and saves us from unnecessary `clone`s when it's already balanced.
+    fn balance(self) -> Self {
+        let return_node = if self.right.height() > self.left.height() + 1 {
+            self.rotate_left()
+        } else if self.left.height() > self.right.height() + 1 {
+            self.rotate_right()
+        } else {
+            self
+        };
+
+        // In tests, after balancing, assert that we've restored/maintained the AVL invariant.
+        if cfg!(test) {
+            let right_height = return_node.right.height() as isize;
+            let left_height = return_node.left.height() as isize;
+            assert!((left_height - right_height).abs() <= 1);
+        }
+        return_node
     }
 }
 
@@ -319,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_two_children_with_no_child() {
+    fn test_delete_two_children_with_no_grandchildren() {
         let mut tree = Tree::new();
         tree = tree.insert(2, 3);
         tree = tree.insert(1, 2);
@@ -332,12 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_two_children_with_child() {
+    fn test_delete_two_children_with_grandchild() {
         let mut tree = Tree::new();
         tree = tree.insert(2, 3);
         tree = tree.insert(1, 2);
-        tree = tree.insert(0, 1);
         tree = tree.insert(3, 4);
+        tree = tree.insert(0, 1);
         tree = tree.delete(&2);
 
         assert_eq!(tree.find(&0), Some(&1));
