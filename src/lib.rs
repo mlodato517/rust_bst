@@ -23,6 +23,6 @@
 //! in the tree. BSTs also naturally support sorted iteration by visiting the
 //! left subtree, then the subtree root, then the right subtree.
 
-#![deny(missing_docs)]
+#![deny(missing_docs, clippy::clone_on_ref_ptr)]
 
 pub mod functional;

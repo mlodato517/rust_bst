@@ -3,11 +3,38 @@
 //! expect to modify the tree (e.g. `insert` or `delete`) instead return
 //! a new tree that reference many of the nodes of the original tree.
 //!
-//! To avoid copious `Rc`ing, we do not implement a particularly efficient
-//! persistent structure - we only allow one tree at a time. Still, most
-//! of the algorithms are the same and there are useful lessons to learn!
+//! # Examples
+//!
+//! ```
+//! use bst::functional::Tree;
+//!
+//! let tree = Tree::new();
+//!
+//! // Nothing in here yet.
+//! assert_eq!(tree.find(&1), None);
+//!
+//! // This `insert` returns a new tree!
+//! let new_tree = tree.insert(1, 2);
+//!
+//! // The new tree has this new value but the old one doesn't.
+//! assert_eq!(new_tree.find(&1), Some(&2));
+//! assert_eq!(tree.find(&1), None);
+//!
+//! // Insert a new value for the same key gives yet another tree.
+//! let newer_tree = new_tree.insert(1, 3);
+//!
+//! // And delete it for good measure.
+//! let newest_tree = newer_tree.delete(&1);
+//!
+//! // All history is preserved.
+//! assert_eq!(newest_tree.find(&1), None);
+//! assert_eq!(newer_tree.find(&1), Some(&3));
+//! assert_eq!(new_tree.find(&1), Some(&2));
+//! assert_eq!(tree.find(&1), None);
+//! ```
 
 use std::cmp;
+use std::rc::Rc;
 
 /// A Binary Search Tree. This can be used for inserting, finding,
 /// and deleting keys and values. Note that this data structure is
@@ -34,23 +61,23 @@ impl<K, V> Tree<K, V> {
     }
 
     /// Returns a new tree that includes a node
-    /// containing the given key and value
+    /// containing the given key and value.
     ///
     /// # Examples
     ///
     /// ```
     /// use bst::functional::Tree;
     ///
-    /// let mut tree = Tree::new();
-    /// tree = tree.insert(1, 2);
+    /// let tree = Tree::new();
+    /// let new_tree = tree.insert(1, 2);
+    /// let newer_tree = new_tree.insert(1, 3);
     ///
-    /// assert_eq!(tree.find(&1), Some(&2));
-    ///
-    /// tree = tree.insert(1, 3);
-    ///
-    /// assert_eq!(tree.find(&1), Some(&3));
+    /// // All history is preserved.
+    /// assert_eq!(newer_tree.find(&1), Some(&3));
+    /// assert_eq!(new_tree.find(&1), Some(&2));
+    /// assert_eq!(tree.find(&1), None);
     /// ```
-    pub fn insert(self, key: K, value: V) -> Self
+    pub fn insert(&self, key: K, value: V) -> Self
     where
         K: cmp::Ord,
     {
@@ -58,13 +85,22 @@ impl<K, V> Tree<K, V> {
             Tree::Leaf => Tree::Node(Node::new(key, value)),
             Tree::Node(n) => match key.cmp(&n.key) {
                 cmp::Ordering::Less => Tree::Node(Node {
-                    left: Box::new(n.left.insert(key, value)),
-                    ..n
+                    left: Rc::new(n.left.insert(key, value)),
+                    key: Rc::clone(&n.key),
+                    right: Rc::clone(&n.right),
+                    value: Rc::clone(&n.value),
                 }),
-                cmp::Ordering::Equal => Tree::Node(Node { value, ..n }),
+                cmp::Ordering::Equal => Tree::Node(Node {
+                    value: Rc::new(value),
+                    key: Rc::clone(&n.key),
+                    left: Rc::clone(&n.left),
+                    right: Rc::clone(&n.right),
+                }),
                 cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Box::new(n.right.insert(key, value)),
-                    ..n
+                    right: Rc::new(n.right.insert(key, value)),
+                    key: Rc::clone(&n.key),
+                    left: Rc::clone(&n.left),
+                    value: Rc::clone(&n.value),
                 }),
             },
         }
@@ -79,8 +115,8 @@ impl<K, V> Tree<K, V> {
     /// ```
     /// use bst::functional::Tree;
     ///
-    /// let mut tree = Tree::new();
-    /// tree = tree.insert(1, 2);
+    /// let tree = Tree::new();
+    /// let tree = tree.insert(1, 2);
     ///
     /// assert_eq!(tree.find(&1), Some(&2));
     /// assert_eq!(tree.find(&42), None);
@@ -109,86 +145,117 @@ impl<K, V> Tree<K, V> {
     /// ```
     /// use bst::functional::Tree;
     ///
-    /// let mut tree = Tree::new();
-    /// tree = tree.insert(1, 2);
+    /// let tree = Tree::new();
+    /// let tree = tree.insert(1, 2);
+    /// let newer_tree = tree.delete(&1);
     ///
-    /// tree = tree.delete(&1);
-    ///
-    /// assert_eq!(tree.find(&1), None);
+    /// // All history is preserved.
+    /// assert_eq!(newer_tree.find(&1), None);
+    /// assert_eq!(tree.find(&1), Some(&2));
     /// ```
-    pub fn delete(self, k: &K) -> Self
+    pub fn delete(&self, k: &K) -> Self
     where
         K: cmp::Ord,
     {
         match self {
-            Tree::Leaf => self,
+            Tree::Leaf => Tree::Leaf,
             Tree::Node(n) => match k.cmp(&n.key) {
                 cmp::Ordering::Less => Tree::Node(Node {
-                    left: Box::new(n.left.delete(k)),
-                    ..n
+                    left: Rc::new(n.left.delete(k)),
+                    key: Rc::clone(&n.key),
+                    right: Rc::clone(&n.right),
+                    value: Rc::clone(&n.value),
                 }),
-                cmp::Ordering::Equal => match (*n.left, *n.right) {
-                    (Tree::Leaf, right_child) => right_child,
-                    (left_child, Tree::Leaf) => left_child,
+                cmp::Ordering::Equal => match (n.left.as_ref(), n.right.as_ref()) {
+                    (Tree::Leaf, Tree::Leaf) => Tree::Leaf,
+                    (Tree::Leaf, Tree::Node(right)) => Tree::Node(right.clone()),
+                    (Tree::Node(left), Tree::Leaf) => Tree::Node(left.clone()),
 
                     // If we have two children we have to figure out
                     // which node to promote. We choose here this node's
                     // predecessor. That is, the largest node in this node's
                     // left subtree.
-                    (Tree::Node(left_child), right_child) => {
+                    (Tree::Node(left_child), _) => {
                         let (pred_key, pred_val, new_left) = left_child.delete_largest();
                         Tree::Node(Node {
                             left: new_left,
-                            right: Box::new(right_child), // I really don't want this allocation here
+                            right: Rc::clone(&n.right),
                             key: pred_key,
                             value: pred_val,
                         })
                     }
                 },
                 cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Box::new(n.right.delete(k)),
-                    ..n
+                    right: Rc::new(n.right.delete(k)),
+                    key: Rc::clone(&n.key),
+                    left: Rc::clone(&n.left),
+                    value: Rc::clone(&n.value),
                 }),
             },
         }
     }
 }
 
-/// A `Node` tree has a key that is used for searching/sorting and a value
+/// A `Node` has a key that is used for searching/sorting and a value
 /// that is associated with that key. It always has two children although
 /// those children may be [`Leaf`][Tree::Leaf]s.
 pub struct Node<K, V> {
-    key: K,
-    value: V,
-    left: Box<Tree<K, V>>,
-    right: Box<Tree<K, V>>,
+    key: Rc<K>,
+    value: Rc<V>,
+    left: Rc<Tree<K, V>>,
+    right: Rc<Tree<K, V>>,
+}
+
+/// Manual implementation of `Clone` so we don't clone references when the generic parameters
+/// aren't `Clone` themselves.
+///
+/// Note the comment on generic structs in
+/// [the docs][<https://doc.rust-lang.org/std/clone/trait.Clone.html#derivable>].
+impl<K, V> Clone for Node<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Rc::clone(&self.key),
+            left: Rc::clone(&self.left),
+            right: Rc::clone(&self.right),
+            value: Rc::clone(&self.value),
+        }
+    }
 }
 
 impl<K, V> Node<K, V> {
+    /// Construct a new `Node` with the given `key` and `value.
     fn new(key: K, value: V) -> Self {
         Self {
-            key,
-            value,
-            left: Box::new(Tree::Leaf),
-            right: Box::new(Tree::Leaf),
+            key: Rc::new(key),
+            value: Rc::new(value),
+            left: Rc::new(Tree::Leaf),
+            right: Rc::new(Tree::Leaf),
         }
     }
 
-    /// Returns the largest node and a new subtree
-    /// without that largest node.
-    fn delete_largest(self) -> (K, V, Box<Tree<K, V>>)
+    /// Returns the key and value of the largest node and a new subtree without that largest node.
+    fn delete_largest(&self) -> (Rc<K>, Rc<V>, Rc<Tree<K, V>>)
     where
         K: cmp::Ord,
     {
-        match *self.right {
-            Tree::Leaf => (self.key, self.value, self.left),
+        match self.right.as_ref() {
+            Tree::Leaf => (
+                Rc::clone(&self.key),
+                Rc::clone(&self.value),
+                Rc::clone(&self.left),
+            ),
             Tree::Node(r) => {
                 let (key, value, sub) = r.delete_largest();
 
                 (
                     key,
                     value,
-                    Box::new(Tree::Node(Node { right: sub, ..self })),
+                    Rc::new(Tree::Node(Node {
+                        right: sub,
+                        key: Rc::clone(&self.key),
+                        left: Rc::clone(&self.left),
+                        value: Rc::clone(&self.value),
+                    })),
                 )
             }
         }
