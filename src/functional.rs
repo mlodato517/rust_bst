@@ -84,24 +84,21 @@ impl<K, V> Tree<K, V> {
         match self {
             Tree::Leaf => Tree::Node(Node::new(key, value)),
             Tree::Node(n) => match key.cmp(&n.key) {
-                cmp::Ordering::Less => Tree::Node(Node {
-                    left: Rc::new(n.left.insert(key, value)),
-                    key: Rc::clone(&n.key),
-                    right: Rc::clone(&n.right),
-                    value: Rc::clone(&n.value),
-                }),
+                cmp::Ordering::Less => {
+                    let new_left = n.left.insert(key, value);
+                    Tree::Node(n.clone_with_children(Rc::new(new_left), Rc::clone(&n.right)))
+                }
                 cmp::Ordering::Equal => Tree::Node(Node {
-                    value: Rc::new(value),
+                    height: n.height,
                     key: Rc::clone(&n.key),
                     left: Rc::clone(&n.left),
                     right: Rc::clone(&n.right),
+                    value: Rc::new(value),
                 }),
-                cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Rc::new(n.right.insert(key, value)),
-                    key: Rc::clone(&n.key),
-                    left: Rc::clone(&n.left),
-                    value: Rc::clone(&n.value),
-                }),
+                cmp::Ordering::Greater => {
+                    let new_right = n.right.insert(key, value);
+                    Tree::Node(n.clone_with_children(Rc::clone(&n.left), Rc::new(new_right)))
+                }
             },
         }
     }
@@ -160,12 +157,10 @@ impl<K, V> Tree<K, V> {
         match self {
             Tree::Leaf => Tree::Leaf,
             Tree::Node(n) => match k.cmp(&n.key) {
-                cmp::Ordering::Less => Tree::Node(Node {
-                    left: Rc::new(n.left.delete(k)),
-                    key: Rc::clone(&n.key),
-                    right: Rc::clone(&n.right),
-                    value: Rc::clone(&n.value),
-                }),
+                cmp::Ordering::Less => {
+                    let new_left = n.left.delete(k);
+                    Tree::Node(n.clone_with_children(Rc::new(new_left), Rc::clone(&n.right)))
+                }
                 cmp::Ordering::Equal => match (n.left.as_ref(), n.right.as_ref()) {
                     (Tree::Leaf, Tree::Leaf) => Tree::Leaf,
                     (Tree::Leaf, Tree::Node(right)) => Tree::Node(right.clone()),
@@ -177,21 +172,29 @@ impl<K, V> Tree<K, V> {
                     // left subtree.
                     (Tree::Node(left_child), _) => {
                         let (pred_key, pred_val, new_left) = left_child.delete_largest();
+                        let height = new_left.height().max(n.right.height()) + 1;
                         Tree::Node(Node {
+                            height,
+                            key: pred_key,
                             left: new_left,
                             right: Rc::clone(&n.right),
-                            key: pred_key,
                             value: pred_val,
                         })
                     }
                 },
-                cmp::Ordering::Greater => Tree::Node(Node {
-                    right: Rc::new(n.right.delete(k)),
-                    key: Rc::clone(&n.key),
-                    left: Rc::clone(&n.left),
-                    value: Rc::clone(&n.value),
-                }),
+                cmp::Ordering::Greater => {
+                    let new_right = n.right.delete(k);
+                    Tree::Node(n.clone_with_children(Rc::clone(&n.left), Rc::new(new_right)))
+                }
             },
+        }
+    }
+
+    /// Gets the height of this tree.
+    fn height(&self) -> usize {
+        match self {
+            Tree::Leaf => 0,
+            Tree::Node(n) => n.height,
         }
     }
 }
@@ -204,6 +207,10 @@ pub struct Node<K, V> {
     value: Rc<V>,
     left: Rc<Tree<K, V>>,
     right: Rc<Tree<K, V>>,
+
+    /// How many levels are in the subtree rooted at this node.
+    /// A node with no children has a height of 1.
+    height: usize,
 }
 
 /// Manual implementation of `Clone` so we don't clone references when the generic parameters
@@ -214,6 +221,7 @@ pub struct Node<K, V> {
 impl<K, V> Clone for Node<K, V> {
     fn clone(&self) -> Self {
         Self {
+            height: self.height,
             key: Rc::clone(&self.key),
             left: Rc::clone(&self.left),
             right: Rc::clone(&self.right),
@@ -226,10 +234,24 @@ impl<K, V> Node<K, V> {
     /// Construct a new `Node` with the given `key` and `value.
     fn new(key: K, value: V) -> Self {
         Self {
+            height: 1,
             key: Rc::new(key),
-            value: Rc::new(value),
             left: Rc::new(Tree::Leaf),
             right: Rc::new(Tree::Leaf),
+            value: Rc::new(value),
+        }
+    }
+
+    /// Create a new Node with the same key/value as this node
+    /// but with the given children.
+    fn clone_with_children(&self, left_child: Rc<Tree<K, V>>, right_child: Rc<Tree<K, V>>) -> Self {
+        let height = left_child.height().max(right_child.height()) + 1;
+        Self {
+            height,
+            key: Rc::clone(&self.key),
+            left: left_child,
+            right: right_child,
+            value: Rc::clone(&self.value),
         }
     }
 
@@ -250,12 +272,9 @@ impl<K, V> Node<K, V> {
                 (
                     key,
                     value,
-                    Rc::new(Tree::Node(Node {
-                        right: sub,
-                        key: Rc::clone(&self.key),
-                        left: Rc::clone(&self.left),
-                        value: Rc::clone(&self.value),
-                    })),
+                    Rc::new(Tree::Node(
+                        self.clone_with_children(Rc::clone(&self.left), sub),
+                    )),
                 )
             }
         }
@@ -325,5 +344,46 @@ mod tests {
         assert_eq!(tree.find(&1), Some(&2));
         assert_eq!(tree.find(&2), None);
         assert_eq!(tree.find(&3), Some(&4));
+    }
+
+    /// Assert the heights of the root, left child, and right child of a tree.
+    macro_rules! assert_heights {
+        ($tree:ident, $height:expr, $left_height:expr, $right_height:expr) => {{
+            assert_eq!($tree.height(), $height);
+
+            if let Tree::Node(n) = &$tree {
+                assert_eq!(n.height, $height);
+
+                assert_eq!(n.right.height(), $right_height);
+                assert_eq!(n.left.height(), $left_height);
+            }
+        }};
+    }
+
+    #[test]
+    fn test_height() {
+        let mut tree = Tree::new();
+        assert_eq!(tree.height(), 0);
+
+        tree = tree.insert(1, 1);
+        assert_heights!(tree, 1, 0, 0);
+
+        // Insert a value to the right making it taller.
+        tree = tree.insert(2, 2);
+        assert_heights!(tree, 2, 0, 1);
+
+        // Insert a value to the left not changing the overall height.
+        tree = tree.insert(0, 0);
+        assert_heights!(tree, 2, 1, 1);
+
+        // Delete that left value to get to the previous heights.
+        tree = tree.delete(&0);
+        assert_heights!(tree, 2, 0, 1);
+
+        // Put it back and delete the root. It'll be replaced with its left child
+        // so we have just the root and a right child.
+        tree = tree.insert(0, 0);
+        tree = tree.delete(&1);
+        assert_heights!(tree, 2, 0, 1);
     }
 }
