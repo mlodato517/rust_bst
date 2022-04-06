@@ -287,23 +287,29 @@ impl<K, V> Node<K, V> {
     /// Returns a new tree by rotating the right child up to become the root. To maintain the BST
     /// invariant we lift the right child's left child to be the new left child's right child.
     fn rotate_left(&self) -> Self {
-        match self.right.as_ref() {
-            Tree::Leaf => self.clone(),
-            Tree::Node(r) => {
+        let old_root = self;
+        match &*old_root.right {
+            // We can't come into this method without a right child since we only rotate left if
+            // the right subtree is taller than the left subtree.
+            Tree::Leaf => unreachable!("`balance` saw right child taller than left child."),
+            Tree::Node(new_root) => {
+                // The old root will be come the left child of the new root. It's left child stays
+                // the same and its right child is the left child of the new root (since the new
+                // root's left child is changing to be this node).
                 let new_left = Tree::Node(Self {
-                    height: self.left.height().max(r.left.height()) + 1,
-                    key: Rc::clone(&self.key),
-                    left: Rc::clone(&self.left),
-                    right: Rc::clone(&r.left),
-                    value: Rc::clone(&self.value),
+                    height: old_root.left.height().max(new_root.left.height()) + 1,
+                    key: Rc::clone(&old_root.key),
+                    left: Rc::clone(&old_root.left),
+                    right: Rc::clone(&new_root.left),
+                    value: Rc::clone(&old_root.value),
                 });
 
                 Self {
-                    height: r.right.height().max(new_left.height()) + 1,
-                    key: Rc::clone(&r.key),
+                    height: new_root.right.height().max(new_left.height()) + 1,
+                    key: Rc::clone(&new_root.key),
                     left: Rc::new(new_left),
-                    right: Rc::clone(&r.right),
-                    value: Rc::clone(&r.value),
+                    right: Rc::clone(&new_root.right),
+                    value: Rc::clone(&new_root.value),
                 }
             }
         }
