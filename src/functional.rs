@@ -284,9 +284,8 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    /// Returns a new tree by rotating the right child up to be come the root. To maintain the BST
+    /// Returns a new tree by rotating the right child up to become the root. To maintain the BST
     /// invariant we lift the right child's left child to be the new left child's right child.
-    /// root.
     fn rotate_left(&self) -> Self {
         match self.right.as_ref() {
             Tree::Leaf => self.clone(),
@@ -310,7 +309,7 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    /// Returns a new tree by rotating the left child up to be come the root. To maintain the BST
+    /// Returns a new tree by rotating the left child up to become the root. To maintain the BST
     /// invariant we lift the left child's right child to be the new right child's left child.
     fn rotate_right(&self) -> Self {
         match self.left.as_ref() {
