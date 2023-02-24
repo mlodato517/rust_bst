@@ -9,22 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Install rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
-          componentst: clippy, rustfmt
+          components: clippy, rustfmt
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@v1.3.0
-
-      - name: Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
+        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         uses: actions-rs/cargo@v1
@@ -41,5 +36,10 @@ jobs:
       - name: Check docs
         uses: actions-rs/cargo@v1
         with:
-          command: doc
-          args: --no-deps
+          command: rustdoc
+          args: --lib -- -D warnings
+
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
