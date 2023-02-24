@@ -60,7 +60,7 @@ fn bench_helper(c: &mut Criterion, name: &str, f: impl Fn(&Tree<i32, i32>, i32))
 
             group.bench_with_input(id, &largest_element_in_tree, |b, _| {
                 b.iter(|| {
-                    let _ignored = f(&tree, largest_element_in_tree as i32);
+                    f(&tree, largest_element_in_tree as i32);
                 })
             });
         }
