@@ -57,7 +57,7 @@ fn contains_not(xs: Vec<i8>, nots: Vec<i8>) -> bool {
     let nots: HashSet<_> = nots.into_iter().collect();
     let mut nots = nots.difference(&added);
 
-    nots.all(|x| tree.find(x) == None)
+    nots.all(|x| tree.find(x).is_none())
 }
 
 #[quickcheck]
