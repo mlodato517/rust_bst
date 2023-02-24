@@ -19,7 +19,7 @@ jobs:
           componentst: clippy, rustfmt
 
       - name: Cache dependencies
-        uses: Swatinem/rust-cache@v1.3.0
+        uses: Swatinem/rust-cache@v2.2.1
 
       - name: Run tests
         uses: actions-rs/cargo@v1
