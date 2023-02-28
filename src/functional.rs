@@ -57,7 +57,7 @@ impl<K, V> Default for Tree<K, V> {
 impl<K, V> Tree<K, V> {
     /// Generates a new, empty `Tree`.
     pub fn new() -> Self {
-        Tree::Leaf
+        Self::Leaf
     }
 
     /// Returns a new tree that includes a node
@@ -82,24 +82,8 @@ impl<K, V> Tree<K, V> {
         K: cmp::Ord,
     {
         match self {
-            Tree::Leaf => Tree::Node(Node::new(key, value)),
-            Tree::Node(n) => match key.cmp(&n.key) {
-                cmp::Ordering::Less => {
-                    let new_left = n.left.insert(key, value);
-                    Tree::Node(n.clone_with_children(Rc::new(new_left), Rc::clone(&n.right)))
-                }
-                cmp::Ordering::Equal => Tree::Node(Node {
-                    height: n.height,
-                    key: Rc::clone(&n.key),
-                    left: Rc::clone(&n.left),
-                    right: Rc::clone(&n.right),
-                    value: Rc::new(value),
-                }),
-                cmp::Ordering::Greater => {
-                    let new_right = n.right.insert(key, value);
-                    Tree::Node(n.clone_with_children(Rc::clone(&n.left), Rc::new(new_right)))
-                }
-            },
+            Self::Leaf => Self::Node(Node::new(key, value)),
+            Self::Node(n) => Self::Node(n.insert(key, value)),
         }
     }
 
@@ -123,12 +107,8 @@ impl<K, V> Tree<K, V> {
         K: cmp::Ord,
     {
         match self {
-            Tree::Leaf => None,
-            Tree::Node(n) => match k.cmp(&n.key) {
-                cmp::Ordering::Less => n.left.find(k),
-                cmp::Ordering::Equal => Some(&n.value),
-                cmp::Ordering::Greater => n.right.find(k),
-            },
+            Self::Leaf => None,
+            Self::Node(n) => n.find(k),
         }
     }
 
@@ -155,50 +135,54 @@ impl<K, V> Tree<K, V> {
         K: cmp::Ord,
     {
         match self {
-            Tree::Leaf => Tree::Leaf,
-            Tree::Node(n) => match k.cmp(&n.key) {
-                cmp::Ordering::Less => {
-                    let new_left = n.left.delete(k);
-                    Tree::Node(n.clone_with_children(Rc::new(new_left), Rc::clone(&n.right)))
-                }
-                cmp::Ordering::Equal => match (n.left.as_ref(), n.right.as_ref()) {
-                    (Tree::Leaf, Tree::Leaf) => Tree::Leaf,
-                    (Tree::Leaf, Tree::Node(right)) => Tree::Node(right.clone()),
-                    (Tree::Node(left), Tree::Leaf) => Tree::Node(left.clone()),
-
-                    // If we have two children we have to figure out
-                    // which node to promote. We choose here this node's
-                    // predecessor. That is, the largest node in this node's
-                    // left subtree.
-                    (Tree::Node(left_child), _) => {
-                        let (pred_key, pred_val, new_left) = left_child.delete_largest();
-                        let height = new_left.height().max(n.right.height()) + 1;
-                        Tree::Node(
-                            Node {
-                                height,
-                                key: pred_key,
-                                left: new_left,
-                                right: Rc::clone(&n.right),
-                                value: pred_val,
-                            }
-                            .balance(),
-                        )
-                    }
-                },
-                cmp::Ordering::Greater => {
-                    let new_right = n.right.delete(k);
-                    Tree::Node(n.clone_with_children(Rc::clone(&n.left), Rc::new(new_right)))
-                }
-            },
+            Self::Leaf => Self::new(),
+            Self::Node(n) => n.delete(k).map(Self::Node).unwrap_or_default(),
         }
     }
 
     /// Gets the height of this tree.
     fn height(&self) -> usize {
         match self {
-            Tree::Leaf => 0,
-            Tree::Node(n) => n.height,
+            Self::Leaf => 0,
+            Self::Node(n) => n.height,
         }
+    }
+}
+
+struct Child<K, V>(Rc<Tree<K, V>>);
+impl<K, V> Clone for Child<K, V> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+impl<K, V> Child<K, V> {
+    fn new() -> Self {
+        Self(Rc::new(Tree::new()))
+    }
+
+    fn height(&self) -> usize {
+        self.0.height()
+    }
+
+    fn insert(&self, key: K, value: V) -> Self
+    where
+        K: cmp::Ord,
+    {
+        Self(Rc::new(self.0.insert(key, value)))
+    }
+
+    fn find(&self, k: &K) -> Option<&V>
+    where
+        K: cmp::Ord,
+    {
+        self.0.find(k)
+    }
+
+    fn delete(&self, k: &K) -> Self
+    where
+        K: cmp::Ord,
+    {
+        Self(Rc::new(self.0.delete(k)))
     }
 }
 
@@ -208,8 +192,8 @@ impl<K, V> Tree<K, V> {
 pub struct Node<K, V> {
     key: Rc<K>,
     value: Rc<V>,
-    left: Rc<Tree<K, V>>,
-    right: Rc<Tree<K, V>>,
+    left: Child<K, V>,
+    right: Child<K, V>,
 
     /// How many levels are in the subtree rooted at this node.
     /// A node with no children has a height of 1.
@@ -226,8 +210,8 @@ impl<K, V> Clone for Node<K, V> {
         Self {
             height: self.height,
             key: Rc::clone(&self.key),
-            left: Rc::clone(&self.left),
-            right: Rc::clone(&self.right),
+            left: self.left.clone(),
+            right: self.right.clone(),
             value: Rc::clone(&self.value),
         }
     }
@@ -239,15 +223,15 @@ impl<K, V> Node<K, V> {
         Self {
             height: 1,
             key: Rc::new(key),
-            left: Rc::new(Tree::Leaf),
-            right: Rc::new(Tree::Leaf),
+            left: Child::new(),
+            right: Child::new(),
             value: Rc::new(value),
         }
     }
 
     /// Create a new Node with the same key/value as this node
     /// but with the given children.
-    fn clone_with_children(&self, left_child: Rc<Tree<K, V>>, right_child: Rc<Tree<K, V>>) -> Self {
+    fn clone_with_children(&self, left_child: Child<K, V>, right_child: Child<K, V>) -> Self {
         let height = left_child.height().max(right_child.height()) + 1;
         Self {
             height,
@@ -259,26 +243,100 @@ impl<K, V> Node<K, V> {
         .balance()
     }
 
-    /// Returns the key and value of the largest node and a new subtree without that largest node.
-    fn delete_largest(&self) -> (Rc<K>, Rc<V>, Rc<Tree<K, V>>)
+    fn insert(&self, key: K, value: V) -> Self
     where
         K: cmp::Ord,
     {
-        match self.right.as_ref() {
+        match key.cmp(&self.key) {
+            cmp::Ordering::Less => {
+                let new_left = self.left.insert(key, value);
+                self.clone_with_children(new_left, self.right.clone())
+            }
+            cmp::Ordering::Equal => Self {
+                height: self.height,
+                key: Rc::clone(&self.key),
+                left: self.left.clone(),
+                right: self.right.clone(),
+                value: Rc::new(value),
+            },
+            cmp::Ordering::Greater => {
+                let new_right = self.right.insert(key, value);
+                self.clone_with_children(self.left.clone(), new_right)
+            }
+        }
+    }
+
+    fn find(&self, k: &K) -> Option<&V>
+    where
+        K: cmp::Ord,
+    {
+        match k.cmp(&self.key) {
+            cmp::Ordering::Less => self.left.find(k),
+            cmp::Ordering::Equal => Some(&self.value),
+            cmp::Ordering::Greater => self.right.find(k),
+        }
+    }
+
+    fn delete(&self, k: &K) -> Option<Self>
+    where
+        K: cmp::Ord,
+    {
+        match k.cmp(&self.key) {
+            cmp::Ordering::Less => {
+                let new_left = self.left.delete(k);
+                Some(self.clone_with_children(new_left, self.right.clone()))
+            }
+            cmp::Ordering::Equal => match (self.left.0.as_ref(), self.right.0.as_ref()) {
+                (Tree::Leaf, Tree::Leaf) => None,
+                (Tree::Leaf, Tree::Node(right)) => Some(right.clone()),
+                (Tree::Node(left), Tree::Leaf) => Some(left.clone()),
+
+                // If we have two children we have to figure out
+                // which node to promote. We choose here this node's
+                // predecessor. That is, the largest node in this node's
+                // left subtree.
+                (Tree::Node(left_child), _) => {
+                    let (pred_key, pred_val, new_left) = left_child.delete_largest();
+                    let height = new_left.height().max(self.right.height()) + 1;
+                    Some(
+                        Node {
+                            height,
+                            key: pred_key,
+                            left: new_left,
+                            right: self.right.clone(),
+                            value: pred_val,
+                        }
+                        .balance(),
+                    )
+                }
+            },
+            cmp::Ordering::Greater => {
+                let new_right = self.right.delete(k);
+                Some(self.clone_with_children(self.left.clone(), new_right))
+            }
+        }
+    }
+
+    /// Returns the key and value of the largest node and a new subtree without that largest node.
+    fn delete_largest(&self) -> (Rc<K>, Rc<V>, Child<K, V>)
+    where
+        K: cmp::Ord,
+    {
+        match self.right.0.as_ref() {
             Tree::Leaf => (
                 Rc::clone(&self.key),
                 Rc::clone(&self.value),
-                Rc::clone(&self.left),
+                self.left.clone(),
             ),
             Tree::Node(r) => {
-                let (key, value, sub) = r.delete_largest();
+                let (key, value, new_right) = r.delete_largest();
 
                 (
                     key,
                     value,
-                    Rc::new(Tree::Node(
-                        self.clone_with_children(Rc::clone(&self.left), sub),
-                    )),
+                    Child(Rc::new(Tree::Node(
+                        self.clone_with_children(self.left.clone(), new_right),
+                    ))),
                 )
             }
         }
@@ -288,7 +346,7 @@ impl<K, V> Node<K, V> {
     /// invariant, we lift the right child's left child to be the new left child's right child.
     fn rotate_left(&self) -> Self {
         let old_root = self;
-        match &*old_root.right {
+        match &*old_root.right.0 {
             // We can't come into this method without a right child since we only rotate left if
             // the right subtree is taller than the left subtree.
             Tree::Leaf => unreachable!("`balance` saw right child taller than left child."),
@@ -299,16 +357,16 @@ impl<K, V> Node<K, V> {
                 let new_left = Tree::Node(Self {
                     height: old_root.left.height().max(new_root.left.height()) + 1,
                     key: Rc::clone(&old_root.key),
-                    left: Rc::clone(&old_root.left),
-                    right: Rc::clone(&new_root.left),
+                    left: old_root.left.clone(),
+                    right: new_root.left.clone(),
                     value: Rc::clone(&old_root.value),
                 });
 
                 Self {
                     height: new_root.right.height().max(new_left.height()) + 1,
                     key: Rc::clone(&new_root.key),
-                    left: Rc::new(new_left),
-                    right: Rc::clone(&new_root.right),
+                    left: Child(Rc::new(new_left)),
+                    right: new_root.right.clone(),
                     value: Rc::clone(&new_root.value),
                 }
             }
@@ -318,22 +376,22 @@ impl<K, V> Node<K, V> {
     /// Returns a new tree by rotating the left child up to become the root. To maintain the AVL
     /// invariant, we lift the left child's right child to be the new right child's left child.
     fn rotate_right(&self) -> Self {
-        match self.left.as_ref() {
+        match self.left.0.as_ref() {
             Tree::Leaf => self.clone(),
             Tree::Node(l) => {
                 let new_right = Tree::Node(Self {
                     height: self.right.height().max(l.right.height()) + 1,
                     key: Rc::clone(&self.key),
-                    left: Rc::clone(&l.right),
-                    right: Rc::clone(&self.right),
+                    left: l.right.clone(),
+                    right: self.right.clone(),
                     value: Rc::clone(&self.value),
                 });
 
                 Self {
                     height: l.left.height().max(new_right.height()) + 1,
                     key: Rc::clone(&l.key),
-                    left: Rc::clone(&l.left),
-                    right: Rc::new(new_right),
+                    left: l.left.clone(),
+                    right: Child(Rc::new(new_right)),
                     value: Rc::clone(&l.value),
                 }
             }
