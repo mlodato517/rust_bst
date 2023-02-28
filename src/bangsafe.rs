@@ -30,6 +30,8 @@ use std::fmt;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
+use crate::util::DeleteResult;
+
 /// Marker value for a `Node`'s height when its value has been removed during deletion. This is
 /// used to ensure that the value isn't re-dropped in `Node::drop`.
 const VALUE_REMOVED: usize = 0;
@@ -200,17 +202,6 @@ impl<K, V> Tree<K, V> {
         // reference).
         unsafe { self.root.as_mut().map(|root| root.as_mut()) }
     }
-}
-
-enum DeleteResult<V> {
-    /// The key wasn't found so nothing was deleted.
-    NotFound,
-    /// The Node returning this is being deleted and has no children to replace itself with. The
-    /// parent who receives this should drop the child and remove its value using
-    /// [`Node::take_value`].
-    DeleteSelf,
-    /// A child node was deleted yielding the value `V` which can be returned to the parent.
-    DeletedChild(V),
 }
 
 struct Node<K, V> {
