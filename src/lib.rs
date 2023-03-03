@@ -25,7 +25,7 @@
 
 #![deny(missing_docs, clippy::clone_on_ref_ptr)]
 
-pub mod functional;
+pub mod immutable;
 
 #[cfg(test)]
 mod test;
