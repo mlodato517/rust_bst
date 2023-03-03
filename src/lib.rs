@@ -26,3 +26,6 @@
 #![deny(missing_docs, clippy::clone_on_ref_ptr)]
 
 pub mod functional;
+
+#[cfg(test)]
+mod test;
