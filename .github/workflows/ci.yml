@@ -37,7 +37,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: rustdoc
-          args: --lib -- -D warnings
+          args: --lib -- -D warnings --document-private-items
 
       - name: Run tests
         uses: actions-rs/cargo@v1
