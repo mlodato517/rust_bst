@@ -404,21 +404,94 @@ impl<K, V> Node<K, V> {
         }
     }
 
+    /// Perform a [double rotation][wikipedia] to rebalance this node. This right-left double
+    /// rotation involves rotating the right child right and then rotating the root left.
+    ///
+    /// ## Panics
+    ///
+    /// This panics if called on a node without a right child (i.e. a node that shouldn't be
+    /// right-left rotated).
+    ///
+    /// [wikipedia]: https://en.wikipedia.org/wiki/AVL_tree#Double_rotation
+    fn rotate_right_left(&self) -> Self {
+        let new_right = {
+            let right = self.right.0.as_ref();
+            let right = right.expect("right-left rotating node should have a right child");
+            right.rotate_right()
+        };
+
+        // Careful with `clone_with_children` here - that calls `balance` which calls this.
+        // It's not an infinite loop or anything, it's just wasteful due to recalculation.
+        let x_prime = Self {
+            key: Rc::clone(&self.key),
+            value: Rc::clone(&self.value),
+            height: self.height,
+            left: self.left.clone(),
+            right: Child(Some(Rc::new(new_right))),
+        };
+        x_prime.rotate_left()
+    }
+
+    /// Perform a [double rotation][wikipedia] to rebalance this node. This left-right double
+    /// rotation involves rotating the left child left and then rotating the root right.
+    ///
+    /// ## Panics
+    ///
+    /// This panics if called on a node without a left child (i.e. a node that shouldn't be
+    /// left-right rotated).
+    ///
+    /// [wikipedia]: https://en.wikipedia.org/wiki/AVL_tree#Double_rotation
+    fn rotate_left_right(&self) -> Self {
+        let new_left = {
+            let left = self.left.0.as_ref();
+            let left = left.expect("left-right rotating node should have a left child");
+            left.rotate_left()
+        };
+
+        // Careful with `clone_with_children` here - that calls `balance` which calls this.
+        // It's not an infinite loop or anything, it's just wasteful due to recalculation.
+        let x_prime = Self {
+            key: Rc::clone(&self.key),
+            value: Rc::clone(&self.value),
+            height: self.height,
+            left: Child(Some(Rc::new(new_left))),
+            right: self.right.clone(),
+        };
+        x_prime.rotate_right()
+    }
+
     /// Balances a tree using the heights of the children.
     ///
     /// **Note** This takes `self` instead of `&self` might not be very functional but it's private,
     /// isn't `mut` and saves us from unnecessary `clone`s when it's already balanced.
     fn balance(self) -> Self {
-        let return_node = if self.right.height() > self.left.height() + 1 {
-            self.rotate_left()
-        } else if self.left.height() > self.right.height() + 1 {
-            self.rotate_right()
-        } else {
-            self
+        // TODO there is probably wasted effort here - we have information based on _where this is
+        // called_ that changes what checks we should make. For instance, if we just inserted into
+        // our left tree, it's not valuable to check if the right subtree is too tall.
+        //
+        // See https://en.wikipedia.org/wiki/AVL_tree#Rebalancing for terminology/logic.
+        let return_node = match (&self.left.0, &self.right.0) {
+            (Some(left), _) if left.height > self.right.height() + 1 => {
+                let balance_factor = left.right.height() as isize - left.left.height() as isize;
+                if balance_factor <= 0 {
+                    self.rotate_right()
+                } else {
+                    self.rotate_left_right()
+                }
+            }
+            (_, Some(right)) if right.height > self.left.height() + 1 => {
+                let balance_factor = right.right.height() as isize - right.left.height() as isize;
+                if balance_factor >= 0 {
+                    self.rotate_left()
+                } else {
+                    self.rotate_right_left()
+                }
+            }
+            _ => self,
         };
 
-        // In tests, after balancing, assert that we've restored/maintained the AVL invariant.
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
+            // Assert that we've restored/maintained the AVL invariant.
             let right_height = return_node.right.height() as isize;
             let left_height = return_node.left.height() as isize;
             assert!((left_height - right_height).abs() <= 1);
@@ -531,5 +604,27 @@ mod tests {
         tree = tree.insert(0, 0);
         tree = tree.delete(&1);
         assert_heights!(tree, 2, 0, 1);
+    }
+
+    #[test]
+    fn test_left_right_rebalance() {
+        let mut tree = Tree::new();
+
+        tree = tree.insert(0, 0);
+        tree = tree.insert(-2, -2);
+        tree = tree.insert(-1, -1);
+
+        assert_heights!(tree, 2, 1, 1);
+    }
+
+    #[test]
+    fn test_right_left_rebalance() {
+        let mut tree = Tree::new();
+
+        tree = tree.insert(0, 0);
+        tree = tree.insert(2, 2);
+        tree = tree.insert(1, 1);
+
+        assert_heights!(tree, 2, 1, 1);
     }
 }
