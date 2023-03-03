@@ -1,5 +1,6 @@
-use bst::functional::Tree;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+
+use bst::immutable::Tree;
 
 /// Returns how many nodes are needed to fill a binary tree with `num_levels` levels.
 fn num_nodes_in_full_tree(num_levels: usize) -> usize {

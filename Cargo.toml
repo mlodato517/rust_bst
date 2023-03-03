@@ -13,5 +13,5 @@ criterion = { version = "0.4", features = ["html_reports"] }
 quickcheck = "1"
 
 [[bench]]
-name = "functional"
+name = "immutable"
 harness = false

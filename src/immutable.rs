@@ -1,4 +1,4 @@
-//! A Functional BST. This is modeled after a BST one would see in
+//! An immutable BST. This is modeled after a BST one would see in
 //! a functional language like Haskell. Any operations that one would
 //! expect to modify the tree (e.g. `insert` or `delete`) instead return
 //! a new tree that reference many of the nodes of the original tree.
@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use bst::functional::Tree;
+//! use bst::immutable::Tree;
 //!
 //! let tree = Tree::new();
 //!
@@ -38,7 +38,7 @@ use std::rc::Rc;
 
 /// A Binary Search Tree. This can be used for inserting, finding,
 /// and deleting keys and values. Note that this data structure is
-/// functional - operations that would modify the tree instead
+/// immutable - operations that would modify the tree instead
 /// return a new tree.
 pub struct Tree<K, V> {
     root: Option<Node<K, V>>,
@@ -62,7 +62,7 @@ impl<K, V> Tree<K, V> {
     /// # Examples
     ///
     /// ```
-    /// use bst::functional::Tree;
+    /// use bst::immutable::Tree;
     ///
     /// let tree = Tree::new();
     /// let new_tree = tree.insert(1, 2);
@@ -94,7 +94,7 @@ impl<K, V> Tree<K, V> {
     /// # Examples
     ///
     /// ```
-    /// use bst::functional::Tree;
+    /// use bst::immutable::Tree;
     ///
     /// let tree = Tree::new();
     /// let tree = tree.insert(1, 2);
@@ -120,7 +120,7 @@ impl<K, V> Tree<K, V> {
     /// # Examples
     ///
     /// ```
-    /// use bst::functional::Tree;
+    /// use bst::immutable::Tree;
     ///
     /// let tree = Tree::new();
     /// let tree = tree.insert(1, 2);
@@ -462,7 +462,7 @@ impl<K, V> Node<K, V> {
 
     /// Balances a tree using the heights of the children.
     ///
-    /// **Note** This takes `self` instead of `&self` might not be very functional but it's private,
+    /// **Note** This takes `self` instead of `&self` might not be very immutable but it's private,
     /// isn't `mut` and saves us from unnecessary `clone`s when it's already balanced.
     fn balance(self) -> Self {
         // TODO there is probably wasted effort here - we have information based on _where this is
