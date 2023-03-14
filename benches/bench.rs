@@ -2,6 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 
 use bst::{bangsafe, immutable};
 
+#[derive(Clone)]
 enum TreeEnum<K, V> {
     Bangsafe(bangsafe::Tree<K, V>),
     Immutable(immutable::Tree<K, V>),
@@ -56,36 +57,29 @@ fn bench_helper(c: &mut Criterion, name: &str, f: impl Fn(&mut TreeEnum<i32, i32
         // TODO consider `max` method on BST.
         let largest_element_in_tree = 2usize.pow(num_levels as u32) - 2;
 
-        let tree_tests = ["immutable", "bangsafe"];
-        for name in tree_tests {
+        let immutable_tree = (0..num_nodes).fold(immutable::Tree::new(), |tree, x| {
+            tree.insert(x as i32, x as i32)
+        });
+        let bangsafe_tree = {
+            let mut tree = bangsafe::Tree::new();
+            for x in 0..num_nodes {
+                tree.insert(x as i32, x as i32);
+            }
+
+            tree
+        };
+        let tree_tests = [
+            ("immutable", TreeEnum::Immutable(immutable_tree)),
+            ("bangsafe", TreeEnum::Bangsafe(bangsafe_tree)),
+        ];
+        for (name, tree) in tree_tests {
             let id = BenchmarkId::new(name, largest_element_in_tree);
 
             group.bench_function(id, |b| {
                 b.iter_custom(|iters| {
                     let mut time = std::time::Duration::ZERO;
                     for _ in 0..iters {
-                        let tree = match name {
-                            "immutable" => {
-                                let immutable_tree = (0..num_nodes)
-                                    .fold(immutable::Tree::new(), |tree, x| {
-                                        tree.insert(x as i32, x as i32)
-                                    });
-                                TreeEnum::Immutable(immutable_tree)
-                            }
-                            "bangsafe" => {
-                                let bangsafe_tree = {
-                                    let mut tree = bangsafe::Tree::new();
-                                    for x in 0..num_nodes {
-                                        tree.insert(x as i32, x as i32);
-                                    }
-
-                                    tree
-                                };
-                                TreeEnum::Bangsafe(bangsafe_tree)
-                            }
-                            _ => unimplemented!(),
-                        };
-                        let mut tree = black_box(tree);
+                        let mut tree = black_box(tree.clone());
                         let instant = std::time::Instant::now();
                         f(&mut tree, black_box(largest_element_in_tree as i32));
                         let elapsed = instant.elapsed();

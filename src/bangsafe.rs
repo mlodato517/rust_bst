@@ -60,6 +60,23 @@ impl<K, V> Drop for Tree<K, V> {
     }
 }
 
+impl<K, V> Clone for Tree<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    // TODO stack based Clone
+    fn clone(&self) -> Self {
+        let root = self.root().map(|root| {
+            let new_root = Box::leak(Box::new(root.clone()));
+            new_root.fix_left_child_parent();
+            new_root.fix_right_child_parent();
+            NonNull::from(new_root)
+        });
+        Self { root }
+    }
+}
+
 impl<K, V> fmt::Debug for Tree<K, V>
 where
     K: fmt::Debug,
@@ -225,6 +242,36 @@ impl<K, V> Drop for Node<K, V> {
             // inner value after dropping. Because we don't have a height of `VALUE_REMOVED`, this
             // value hasn't been taken yet so we're not dropping it twice.
             unsafe { ManuallyDrop::drop(&mut self.value) };
+        }
+    }
+}
+
+impl<K, V> Clone for Node<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    // TODO stack based Clone
+    fn clone(&self) -> Self {
+        let left = self.left().map(|left| {
+            let new_left = Box::leak(Box::new(left.clone()));
+            new_left.fix_left_child_parent();
+            new_left.fix_right_child_parent();
+            NonNull::from(new_left)
+        });
+        let right = self.right().map(|right| {
+            let new_right = Box::leak(Box::new(right.clone()));
+            new_right.fix_left_child_parent();
+            new_right.fix_right_child_parent();
+            NonNull::from(new_right)
+        });
+        Self {
+            height: self.height,
+            key: self.key.clone(),
+            value: self.value.clone(),
+            left,
+            right,
+            parent: self.parent,
         }
     }
 }
@@ -1038,6 +1085,62 @@ mod tests {
         let nine_node_parent = unsafe { nine_node.as_ref().parent.unwrap() };
 
         assert_eq!(five_node, nine_node_parent);
+    }
+
+    #[test]
+    fn clone_works() {
+        let mut tree = {
+            let mut tree = Tree::new();
+
+            tree.insert(5, 5);
+
+            tree.insert(3, 3);
+            tree.insert(7, 7);
+
+            tree.insert(1, 1);
+            tree.insert(4, 4);
+            tree.insert(6, 6);
+            tree.insert(8, 8);
+
+            tree.clone()
+        };
+
+        let five_node = tree.root.unwrap();
+
+        // Ensure root children are fixed
+        let three_node = unsafe { five_node.as_ref().left.unwrap() };
+        let three_node_parent = unsafe { three_node.as_ref().parent.unwrap() };
+        assert_eq!(five_node, three_node_parent);
+
+        let seven_node = unsafe { five_node.as_ref().right.unwrap() };
+        let seven_node_parent = unsafe { seven_node.as_ref().parent.unwrap() };
+        assert_eq!(five_node, seven_node_parent);
+
+        // Ensure deeper children are fixed
+        let one_node = unsafe { three_node.as_ref().left.unwrap() };
+        let one_node_parent = unsafe { one_node.as_ref().parent.unwrap() };
+        assert_eq!(three_node, one_node_parent);
+
+        let four_node = unsafe { three_node.as_ref().right.unwrap() };
+        let four_node_parent = unsafe { four_node.as_ref().parent.unwrap() };
+        assert_eq!(three_node, four_node_parent);
+
+        let six_node = unsafe { five_node.as_ref().left.unwrap() };
+        let six_node_parent = unsafe { six_node.as_ref().parent.unwrap() };
+        assert_eq!(five_node, six_node_parent);
+
+        let eight_node = unsafe { five_node.as_ref().right.unwrap() };
+        let eight_node_parent = unsafe { eight_node.as_ref().parent.unwrap() };
+        assert_eq!(five_node, eight_node_parent);
+
+        assert_eq!(tree.delete(&1), Some(1));
+        assert_eq!(tree.delete(&3), Some(3));
+        assert_eq!(tree.delete(&4), Some(4));
+
+        assert_eq!(tree.delete(&7), Some(7));
+        assert_eq!(tree.delete(&6), Some(6));
+        assert_eq!(tree.delete(&8), Some(8));
+        assert_eq!(tree.delete(&5), Some(5));
     }
 
     #[test]

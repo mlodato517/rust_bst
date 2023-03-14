@@ -44,6 +44,14 @@ pub struct Tree<K, V> {
     root: Option<Node<K, V>>,
 }
 
+impl<K, V> Clone for Tree<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+        }
+    }
+}
+
 impl<K, V> Default for Tree<K, V> {
     fn default() -> Self {
         Self::new()
