@@ -37,9 +37,9 @@ const VALUE_REMOVED: usize = 0;
 /// A self-balancing Binary Search Tree (specifically, an AVL tree). This can be used for
 /// inserting, finding, and deleting keys and values.
 pub struct Tree<K, V> {
-    // This is a pointer instead of a `Node` so that it can be moved around with the `Tree` without
-    // the children's parent pointers breaking.
-    root: Option<NonNull<Node<K, V>>>,
+    // This is a `Link` instead of an `Option<Node>` so that it can be moved around with the `Tree`
+    // without the children's parent pointers breaking.
+    root: Link<K, V>,
 }
 
 impl<K, V> Default for Tree<K, V> {
@@ -51,7 +51,7 @@ impl<K, V> Default for Tree<K, V> {
 impl<K, V> Drop for Tree<K, V> {
     // TODO stack based drop
     fn drop(&mut self) {
-        if let Some(mut root) = self.root.take() {
+        if let Some(mut root) = self.root.take().0 {
             // SAFETY: We own the root we're dropping so this won't be called twice. The root was
             // initially allocated using `Box::new` (in `Node::new_boxed`) so this should be well
             // aligned, etc.
@@ -73,7 +73,7 @@ where
             new_root.fix_right_child_parent();
             NonNull::from(new_root)
         });
-        Self { root }
+        Self { root: Link(root) }
     }
 }
 
@@ -91,7 +91,7 @@ where
 impl<K, V> Tree<K, V> {
     /// Generate a new, empty `Tree`.
     pub fn new() -> Self {
-        Self { root: None }
+        Self { root: Link(None) }
     }
 
     /// Potentially finds the value associated with the given key in this tree. If no node has the
@@ -136,8 +136,11 @@ impl<K, V> Tree<K, V> {
         K: Ord,
     {
         match self.root_mut() {
-            Some(root) => root.insert(key, value),
-            None => self.root = Some(NonNull::from(Box::leak(Node::new_boxed(key, value)))),
+            Some(root) => {
+                root.insert(key, value);
+                self.root.balance();
+            }
+            None => self.root = Link(Some(NonNull::from(Box::leak(Node::new_boxed(key, value))))),
         }
     }
 
@@ -160,20 +163,20 @@ impl<K, V> Tree<K, V> {
     where
         K: Ord,
     {
-        match self.root_mut().map(|root| (root.delete(key), root)) {
-            Some((DeleteResult::DeleteSelf, _)) => {
-                let deleted = self.root.take().expect("Deleting root implies root");
+        match self.root_mut().map(|root| root.delete(key)) {
+            Some(DeleteResult::DeleteSelf) => {
+                let deleted = self.root.take().0.expect("Deleting root implies root");
                 // SAFETY: Getting `DeleteSelf` here means we deleted the root and it had no
                 // children. This means nothing references it except this `Tree`. We just called
                 // `self.root.take()` so now the `Tree` doesn't reference it either. So nothing
                 // could dereference the value after this.
                 unsafe { Some(Node::take_value(deleted)) }
             }
-            Some((DeleteResult::DeletedChild(value), root)) => {
-                root.balance();
+            Some(DeleteResult::DeletedChild(value)) => {
+                self.root.balance();
                 Some(value)
             }
-            None | Some((DeleteResult::NotFound, _)) => None,
+            None | Some(DeleteResult::NotFound) => None,
         }
     }
 
@@ -186,7 +189,7 @@ impl<K, V> Tree<K, V> {
         // This isn't the sexiest guarantee but it feels similar to `ManuallyDrop::drop`. It's
         // unsafe to drop it because _later_ it could be dereferenced (or there is a current
         // reference).
-        unsafe { self.root.as_ref().map(|root| root.as_ref()) }
+        unsafe { self.root.0.as_ref().map(|root| root.as_ref()) }
     }
 
     fn root_mut(&mut self) -> Option<&mut Node<K, V>> {
@@ -198,7 +201,167 @@ impl<K, V> Tree<K, V> {
         // This isn't the sexiest guarantee but it feels similar to `ManuallyDrop::drop`. It's
         // unsafe to drop it because _later_ it could be dereferenced (or there is a current
         // reference).
-        unsafe { self.root.as_mut().map(|root| root.as_mut()) }
+        unsafe { self.root.0.as_mut().map(|root| root.as_mut()) }
+    }
+}
+
+struct Link<K, V>(Option<NonNull<Node<K, V>>>);
+
+impl<K, V> Clone for Link<K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+impl<K, V> Copy for Link<K, V> {}
+
+impl<K, V> Link<K, V> {
+    fn root(&self) -> Option<&Node<K, V>> {
+        // SAFETY: If the node is not `None` then it is a valid `Node`. Because we take `&self`
+        // here, there can be no aliasing with `self.root_mut()`. There can only be aliasing with
+        // `self.0.unwrap().as_mut()`. This code would be unsafe so it'd be the caller's
+        // responsibility to ensure there is no existing borrow of the inner pointer.
+        //
+        // This isn't the sexiest guarantee but it feels similar to `ManuallyDrop::drop`. It's
+        // unsafe to drop it because _later_ it could be dereferenced (or there is a current
+        // reference).
+        unsafe { self.0.as_ref().map(|ptr| ptr.as_ref()) }
+    }
+
+    fn root_mut(&mut self) -> Option<&mut Node<K, V>> {
+        unsafe { self.0.as_mut().map(|ptr| ptr.as_mut()) }
+    }
+
+    fn take(&mut self) -> Self {
+        Link(self.0.take())
+    }
+
+    // /// # Safety
+    // ///
+    // /// The caller must ensure that the value of the passed node is never referenced.
+    // unsafe fn take_value(mut self) -> Option<V> {
+    //     self.0.take().map(|mut ptr| {
+    //         let mut node = *Box::from_raw(ptr.as_mut());
+    //         node.height = VALUE_REMOVED;
+    //         ManuallyDrop::take(&mut node.value)
+    //     })
+    // }
+
+    fn balance(&mut self) {
+        let Some(root) = self.root_mut() else {
+            return;
+        };
+        // TODO this is probably inefficient - inlining this probably allows us to avoid checks
+        // (e.g. if we just inserted into the right child, we don't need to check if the left node
+        // is taller) but this currently matches the immutable tree so it's a better performance
+        // comparison.
+        //
+        // TODO there are lots of duplicate `is_null()` and `match Option<>` branches in here.
+        //
+        // See https://en.wikipedia.org/wiki/AVL_tree#Rebalancing for terminology.
+        root.fix_height();
+        match (root.balance_factor(), root.left(), root.right()) {
+            (-2, Some(left), _) => match left.balance_factor() {
+                n if n <= 0 => self.rotate_right(),
+                _ => self.rotate_left_right(),
+            },
+            (2, _, Some(right)) => match right.balance_factor() {
+                n if n >= 0 => self.rotate_left(),
+                _ => self.rotate_right_left(),
+            },
+            _ => {}
+        }
+
+        if cfg!(debug_assertions) {
+            let Some(root) = self.root() else {
+                return;
+            };
+            let left_height = root.left().map_or(0, |n| n.height);
+            let right_height = root.right().map_or(0, |n| n.height);
+            assert_eq!(root.height, left_height.max(right_height) + 1);
+            assert!(left_height.abs_diff(right_height) <= 1);
+        }
+    }
+
+    /// Rotate self to the right. This moves the left child up vertically and self down vertically.
+    /// Used to rebalance the tree when the left child is too tall. As such, it must only be called
+    /// when there _is_ a left child.
+    ///
+    /// ## Panics
+    ///
+    /// When called on a node without a left child.
+    ///
+    /// # Diagram
+    ///
+    /// Roughly speaking, we want to perform this transformation:
+    ///
+    /// ```text
+    ///    Option<parent>            Option<parent>
+    ///      /                         /
+    ///   old_root (i.e. "self")    new_root
+    ///    /     \                  /     \
+    /// new_root  z     rotate ->  x    old_root
+    ///  / \                               /  \
+    /// x   y                             y    z
+    /// ```
+    fn rotate_right(&mut self) {
+        let mut old_root = self.take();
+        let old_root = old_root.root_mut().expect("Cannot rotate empty tree/node.");
+        // let old_root = unsafe { old_root.as_mut() };
+
+        let mut new_root = old_root.left.take();
+        let new_root = new_root.root_mut().expect("Rotate right => left child");
+
+        let old_parent = old_root.parent;
+        let old_right = new_root.right.take();
+
+        // NB We can skip `fix_right_child_parent` here because we have everything we need.
+        old_root.parent = Link(Some(new_root.into()));
+        old_root.left = old_right;
+        old_root.fix_left_child_parent();
+        old_root.fix_height();
+
+        new_root.parent = old_parent;
+        new_root.right = Link(Some(old_root.into()));
+        new_root.fix_height();
+        self.0 = Some(new_root.into());
+    }
+
+    fn rotate_left(&mut self) {
+        let mut old_root = self.take();
+        let old_root = old_root
+            .root_mut()
+            .expect("Rotating a tree requires a root");
+
+        let mut new_root = old_root.right.take();
+        let new_root = new_root.root_mut().expect("Rotate left => right child");
+
+        let old_left = new_root.left.take();
+
+        // NB We can skip `fix_right_child_parent` here because we have everything we need.
+        old_root.parent = Link(Some(new_root.into()));
+        old_root.right = old_left;
+        old_root.fix_right_child_parent();
+        old_root.fix_height();
+
+        new_root.parent = Link(None);
+        new_root.left = Link(Some(old_root.into()));
+        new_root.fix_height();
+        self.0 = Some(new_root.into());
+    }
+
+    fn rotate_right_left(&mut self) {
+        self.root_mut()
+            .expect("Rotating a tree requires a root")
+            .right
+            .rotate_right();
+        self.rotate_left();
+    }
+    fn rotate_left_right(&mut self) {
+        self.root_mut()
+            .expect("Rotating a tree requires a root")
+            .left
+            .rotate_left();
+        self.rotate_right();
     }
 }
 
@@ -216,10 +379,10 @@ enum DeleteResult<V> {
 struct Node<K, V> {
     key: K,
     value: ManuallyDrop<V>,
-    left: Option<NonNull<Node<K, V>>>,
-    right: Option<NonNull<Node<K, V>>>,
+    left: Link<K, V>,
+    right: Link<K, V>,
     height: usize,
-    parent: Option<NonNull<Node<K, V>>>,
+    parent: Link<K, V>,
 }
 
 impl<K, V> Drop for Node<K, V> {
@@ -229,10 +392,10 @@ impl<K, V> Drop for Node<K, V> {
         // children so we won't drop them twice. They were initially allocated using `Box::new` (in
         // `Node::new_boxed`) so they should be well aligned, etc.
         unsafe {
-            if let Some(mut left) = self.left.take() {
+            if let Some(mut left) = self.left.0.take() {
                 drop(Box::from_raw(left.as_mut()));
             }
-            if let Some(mut right) = self.right.take() {
+            if let Some(mut right) = self.right.0.take() {
                 drop(Box::from_raw(right.as_mut()));
             }
         }
@@ -269,8 +432,8 @@ where
             height: self.height,
             key: self.key.clone(),
             value: self.value.clone(),
-            left,
-            right,
+            left: Link(left),
+            right: Link(right),
             parent: self.parent,
         }
     }
@@ -298,44 +461,40 @@ impl<K, V> Node<K, V> {
         Box::new(Node {
             height: 1,
             key,
-            left: None,
-            parent: None,
-            right: None,
+            left: Link(None),
+            parent: Link(None),
+            right: Link(None),
             value: ManuallyDrop::new(value),
         })
     }
 
     fn left(&self) -> Option<&Self> {
-        // SAFETY: See the comment on `Tree::root`.
-        unsafe { self.left.as_ref().map(|left| left.as_ref()) }
+        self.left.root()
     }
 
     fn right(&self) -> Option<&Self> {
-        // SAFETY: See the comment on `Tree::root`.
-        unsafe { self.right.as_ref().map(|right| right.as_ref()) }
+        self.right.root()
     }
 
     fn left_mut(&mut self) -> Option<&mut Self> {
-        // SAFETY: See the comment on `Tree::root_mut`.
-        unsafe { self.left.as_mut().map(|left| left.as_mut()) }
+        self.left.root_mut()
     }
 
     fn right_mut(&mut self) -> Option<&mut Self> {
-        // SAFETY: See the comment on `Tree::root_mut`.
-        unsafe { self.right.as_mut().map(|right| right.as_mut()) }
+        self.right.root_mut()
     }
 
     fn fix_left_child_parent(&mut self) {
         let self_ptr = NonNull::from(&*self);
         if let Some(left) = self.left_mut() {
-            left.parent = Some(self_ptr);
+            left.parent = Link(Some(self_ptr));
         }
     }
 
     fn fix_right_child_parent(&mut self) {
         let self_ptr = NonNull::from(&*self);
         if let Some(right) = self.right_mut() {
-            right.parent = Some(self_ptr);
+            right.parent = Link(Some(self_ptr));
         }
     }
 
@@ -358,10 +517,12 @@ impl<K, V> Node<K, V> {
             Ordering::Less => match self.left_mut() {
                 Some(left) => {
                     left.insert(key, value);
-                    self.balance();
+                    self.left.balance();
                 }
                 None => {
-                    self.left = Some(NonNull::from(Box::leak(Self::new_boxed(key, value))));
+                    let mut new_left = Self::new_boxed(key, value);
+                    new_left.parent = Link(Some(self.into()));
+                    self.left = Link(Some(NonNull::from(Box::leak(new_left))));
                     // Because `self` is an AVL tree before this insert, either:
                     //   1. `self.right` was empty and `self` had height 1
                     //   2. `self.right` was non-empty and `self` had height 2
@@ -377,10 +538,12 @@ impl<K, V> Node<K, V> {
             Ordering::Greater => match self.right_mut() {
                 Some(right) => {
                     right.insert(key, value);
-                    self.balance();
+                    self.right.balance();
                 }
                 None => {
-                    self.right = Some(NonNull::from(Box::leak(Self::new_boxed(key, value))));
+                    let mut new_right = Self::new_boxed(key, value);
+                    new_right.parent = Link(Some(self.into()));
+                    self.right = Link(Some(NonNull::from(Box::leak(new_right))));
                     // See the comment in the same case for `Ordering:::Less`
                     self.height = 2;
                 }
@@ -394,256 +557,6 @@ impl<K, V> Node<K, V> {
             if let Some(right) = self.right() {
                 assert!(self.key < right.key);
             }
-        }
-    }
-
-    /// Rotate self to the right. This moves the left child up vertically and self down vertically.
-    /// Used to rebalance the tree when the left child is too tall. As such, it must only be called
-    /// when there _is_ a left child.
-    ///
-    /// ## Panics
-    ///
-    /// When called on a node without a left child.
-    ///
-    /// # Diagram
-    ///
-    /// Roughly speaking, we want to perform this transformation:
-    ///
-    /// ```text
-    ///    Option<parent>            Option<parent>
-    ///      /                         /
-    ///   old_root (i.e. "self")    new_root
-    ///    /     \                  /     \
-    /// new_root  z     rotate ->  x    old_root
-    ///  / \                               /  \
-    /// x   y                             y    z
-    /// ```
-    ///
-    /// This looks like:
-    /// 1. `parent.left = new_root; new_root.parent = parent;`
-    /// 2. `old_root.left = new_root.right; old_root.left.parent = old_root;`
-    /// 3. `old_root.parent = new_root; new_root.right = old_root;`
-    ///
-    /// One issue here is that, if `self` is the root of the entire tree (i.e. there is no parent),
-    /// then we can't communicate to the `Tree` that its root changed. Instead, we have to modify
-    /// `old_root` directly via something like `std::mem::swap(old_root, new_root)`. That leaves us
-    /// in an incredibly confusing situation where a bunch of children pointers don't match up with
-    /// `parent` pointers:
-    ///
-    /// ```text
-    ///    Option<parent>          Option<parent>
-    ///      /                      /       ^
-    ///   old_root                 v        |
-    ///    /     \         ->   new_root old_root
-    /// new_root  z              / ^ \    ^ ^\
-    ///  / \                    /  |  v  / /  \
-    /// x   y                   |  |  y-/ /    |
-    ///                         |  |     /     |
-    ///                         v  |    /      v
-    ///                         x------/       z
-    ///                             \---------/
-    /// ```
-    ///
-    /// Note here that `new_root.parent = new_root` and `old_root.left = old_root`. Those are self
-    /// referential which isn't easy to draw...
-    ///
-    /// Looking at our original picture, we need to swap the two root parents:
-    ///
-    /// ```text
-    /// std::mem::swap(new_root.parent, old_root.parent);
-    /// ```
-    ///
-    /// ```text
-    ///    Option<parent>            Option<parent>
-    ///     /       ^                 /   /---
-    ///    v        |                /   v    \
-    /// new_root old_root    ->   new_root old_root
-    ///  / ^ \    ^ ^\             / ^ \    ^ ^\
-    /// /  |  v  / /  \           /  |  v  / /  \
-    /// |  |  y-/ /    |          |  |  y-/ /    |
-    /// |  |     /     |          |  |     /     |
-    /// v  |    /      v          v  |    /      v
-    /// x------/       z          x------/       z
-    ///     \---------/               \---------/
-    /// ```
-    ///
-    /// Next, we'll fix one pair of children/parents. We'll start with `old_root.left` and
-    /// `new_root.right`:
-    ///
-    /// ```text
-    /// old_root.left = new_root.right;
-    /// new_root.right = old_root;
-    /// ```
-    ///
-    /// ```text
-    ///    Option<parent            Option<parent
-    ///     /   /---                 /
-    ///    /   v    \            new_root
-    /// new_root old_root   ->    / ^  \
-    ///  / ^ \    ^ ^\           /  | old_root
-    /// /  |  v  / /  \          |  |  / ^ \
-    /// |  |  y-/ /    |         |  | y  |  |
-    /// |  |     /     |         v  |    /  |
-    /// v  |    /      v         x------/   v
-    /// x------/       z             \------z
-    ///     \---------/
-    /// ```
-    ///
-    /// Finally, we fix the other pair of children/parents (i.e. `old_root.right` and
-    /// `new_root.left`):
-    ///
-    /// ```text
-    /// old_root.right.parent = old_root;
-    /// new_root.left.parent = new_root;
-    /// ```
-    ///
-    /// ```text
-    ///    Option<parent           Option<parent>
-    ///     /                        /
-    /// new_root                  new_root
-    ///  / ^  \             ->    /     \
-    /// /  | old_root            x    old_root
-    /// |  |  / ^ \                      /  \
-    /// |  | y  |  |                    y    z
-    /// v  |    /  |
-    /// x------/   v
-    ///     \------z
-    /// ```
-    fn rotate_right(&mut self)
-    where
-        K: Ord,
-    {
-        // TODO Optimize - use const generics to make this generic over if we're the root. If we
-        // are (and we probably rarely will be), we have to do the below. If we aren't, we can just
-        // swap some pointers around.
-
-        // SAFETY: The only code dereferencing the node behind `self.left` is code called directly
-        // on `old_root` so there is no aliasing.
-        let old_root = unsafe {
-            self.left
-                .expect("Rotating right implies a left child")
-                .as_mut()
-        };
-        let new_root = &mut *self;
-        std::mem::swap(new_root, old_root);
-        std::mem::swap(&mut new_root.parent, &mut old_root.parent);
-
-        // Due to stacked borrows, we must make all modifications to `old_parent` first before
-        // going back to `new_parent`
-        old_root.left = new_root.right;
-        old_root.fix_right_child_parent();
-        old_root.fix_height();
-
-        new_root.right = Some(old_root.into());
-        new_root.fix_left_child_parent();
-        new_root.fix_height();
-    }
-
-    /// Perform a double left-right rotation to maintain the AVL property. See [the Wikipedia
-    /// article][wiki] for more details.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if called on a `Node` with no left child.
-    ///
-    /// [wiki]: https://en.wikipedia.org/wiki/AVL_tree#Double_rotation
-    fn rotate_left_right(&mut self)
-    where
-        K: Ord,
-    {
-        self.left_mut()
-            .expect("Rotating left-right requires left child")
-            .rotate_left();
-        self.rotate_right();
-    }
-
-    /// Rotate self to the left. This moves the right child up vertically and self down vertically.
-    /// Used to rebalance the tree when the right child is too tall. As such, it must only be called
-    /// when there _is_ a right child.
-    ///
-    /// For more information, see the documentation on [`Node::rotate_right`].
-    ///
-    /// ## Panics
-    ///
-    /// When called on a node without a right child.
-    fn rotate_left(&mut self)
-    where
-        K: Ord,
-    {
-        // TODO Optimize - use const generics to make this generic over if we're the root. If we
-        // are (and we probably rarely will be), we have to do the below. If we aren't, we can just
-        // swap some pointers around.
-
-        // SAFETY: The only code dereferencing the node behind `self.right` is code called directly
-        // on `old_root` so there is no aliasing.
-        let old_root = unsafe {
-            self.right
-                .expect("Rotating left implies a right child")
-                .as_mut()
-        };
-        let new_root = &mut *self;
-        std::mem::swap(new_root, old_root);
-        std::mem::swap(&mut new_root.parent, &mut old_root.parent);
-
-        // Due to stacked borrows we must make all modifications to `old_parent` first before going
-        // back to `new_parent`
-        old_root.right = new_root.left;
-        old_root.fix_left_child_parent();
-        old_root.fix_height();
-
-        new_root.left = Some(old_root.into());
-        new_root.fix_right_child_parent();
-        new_root.fix_height();
-    }
-
-    /// Perform a double right-left rotation to maintain the AVL property. See [the Wikipedia
-    /// article][wiki] for more details.
-    ///
-    /// ## Panics
-    ///
-    /// Panics if called on a `Node` with no right child.
-    ///
-    /// [wiki]: https://en.wikipedia.org/wiki/AVL_tree#Double_rotation
-    fn rotate_right_left(&mut self)
-    where
-        K: Ord,
-    {
-        self.right_mut()
-            .expect("Rotating right-left requires right child")
-            .rotate_right();
-        self.rotate_left();
-    }
-
-    fn balance(&mut self)
-    where
-        K: Ord,
-    {
-        // TODO this is probably inefficient - inlining this probably allows us to avoid checks
-        // (e.g. if we just inserted into the right child, we don't need to check if the left node
-        // is taller) but this currently matches the immutable tree so it's a better performance
-        // comparison.
-        //
-        // TODO there are lots of duplicate `is_null()` and `match Option<>` branches in here.
-        //
-        // See https://en.wikipedia.org/wiki/AVL_tree#Rebalancing for terminology.
-        self.fix_height();
-        match (self.balance_factor(), self.left(), self.right()) {
-            (-2, Some(left), _) => match left.balance_factor() {
-                n if n <= 0 => self.rotate_right(),
-                _ => self.rotate_left_right(),
-            },
-            (2, _, Some(right)) => match right.balance_factor() {
-                n if n >= 0 => self.rotate_left(),
-                _ => self.rotate_right_left(),
-            },
-            _ => {}
-        }
-
-        if cfg!(debug_assertions) {
-            let left_height = self.left().map_or(0, |n| n.height);
-            let right_height = self.right().map_or(0, |n| n.height);
-            assert_eq!(self.height, left_height.max(right_height) + 1);
-            assert!(left_height.abs_diff(right_height) <= 1);
         }
     }
 
@@ -677,25 +590,27 @@ impl<K, V> Node<K, V> {
     where
         K: Ord,
     {
-        let result = match key.cmp(&self.key) {
+        match key.cmp(&self.key) {
             Ordering::Less => match self.left_mut().map(|n| n.delete(key)) {
                 Some(DeleteResult::DeleteSelf) => {
-                    let deleted_left = self.left.take().expect("Deleting left => left");
+                    let deleted_left = self.left.0.take().expect("Deleting left => left");
                     // SAFETY: Getting `DeleteSelf` here means we deleted the left child and it had
                     // no children. This means nothing references it except this `Node`. We just
                     // called `self.left.take()` so now this `Node` doesn't reference it either. So
                     // nothing could dereference the value after this.
                     unsafe { DeleteResult::DeletedChild(Node::take_value(deleted_left)) }
                 }
-                Some(delete_result) => delete_result,
-                None => DeleteResult::NotFound,
+                Some(delete_result @ DeleteResult::DeletedChild(_)) => {
+                    self.left.balance();
+                    delete_result
+                }
+                None | Some(DeleteResult::NotFound) => DeleteResult::NotFound,
             },
-            Ordering::Equal => match (self.left.take(), self.right.take()) {
+            Ordering::Equal => match (self.left.0.take(), self.right.0.take()) {
                 // We'll let our parent drop us and take our value
                 (None, None) => DeleteResult::DeleteSelf,
                 (None, Some(mut to_delete)) => {
-                    // TODO Optimize - use const generics to make this generic over if we're the
-                    // root. If we are (and we probably rarely will be), we have to do the below.
+                    // TODO Optimize - if we're the root (should be rare), we have to do the below.
                     // If we aren't, we can just swap some pointers around.
 
                     // SAFETY: No other pointers are dereferenced during `deleted`'s lifetime. The
@@ -748,8 +663,11 @@ impl<K, V> Node<K, V> {
                                 std::mem::swap(self, deleted);
 
                                 self.parent = deleted.parent;
-                                self.right = Some(right);
-                                self.left = Some(left_node);
+                                self.right = Link(Some(right));
+                                self.left = Link(Some(left_node));
+
+                                // Remember - we deleted from largets item from the left tree!
+                                self.left.balance();
                             }
 
                             // SAFETY: Because we used `std::mem::swap`, we're deleting `self'`s
@@ -769,7 +687,7 @@ impl<K, V> Node<K, V> {
                                 std::mem::swap(self, deleted);
 
                                 self.parent = deleted.parent;
-                                self.right = Some(right);
+                                self.right = Link(Some(right));
                             }
                             self.fix_left_child_parent();
 
@@ -789,24 +707,20 @@ impl<K, V> Node<K, V> {
             },
             Ordering::Greater => match self.right_mut().map(|n| n.delete(key)) {
                 Some(DeleteResult::DeleteSelf) => {
-                    let deleted_right = self.right.take().expect("Deleting implies existence");
+                    let deleted_right = self.right.0.take().expect("Deleting implies existence");
                     // SAFETY: Getting `DeleteSelf` here means we deleted the right child and it
                     // had no children. This means nothing references it except this `Node`. We
                     // just called `self.right.take()` so now this `Node` doesn't reference it
                     // either. So nothing could dereference the value after this.
                     unsafe { DeleteResult::DeletedChild(Node::take_value(deleted_right)) }
                 }
-                Some(delete_result) => delete_result,
-                None => DeleteResult::NotFound,
+                Some(delete_result @ DeleteResult::DeletedChild(_)) => {
+                    self.right.balance();
+                    delete_result
+                }
+                None | Some(DeleteResult::NotFound) => DeleteResult::NotFound,
             },
-        };
-
-        // TODO Can probably call more surgically
-        if !matches!(result, DeleteResult::NotFound) {
-            self.balance();
         }
-
-        result
     }
 
     /// # Safety
@@ -821,11 +735,8 @@ impl<K, V> Node<K, V> {
 
     /// Deletes the largest node in the tree by recursing to the right until there is no right
     /// child.
-    fn delete_largest(&mut self) -> DeleteResult<NonNull<Self>>
-    where
-        K: Ord,
-    {
-        let Some(right) = self.right.as_mut() else {
+    fn delete_largest(&mut self) -> DeleteResult<NonNull<Self>> {
+        let Some(right) = self.right.0.as_mut() else {
             return DeleteResult::DeleteSelf;
         };
         // SAFETY: The only other dereferences after this are:
@@ -837,13 +748,12 @@ impl<K, V> Node<K, V> {
         let right = unsafe { right.as_mut() };
         match right.delete_largest() {
             DeleteResult::DeleteSelf => {
-                self.right = right.left.take();
+                self.right = Link(right.left.0.take());
                 self.fix_right_child_parent();
-                self.balance();
                 DeleteResult::DeletedChild(right.into())
             }
             result @ DeleteResult::DeletedChild(_) => {
-                self.balance();
+                self.right.balance();
                 result
             }
             DeleteResult::NotFound => panic!("No largest node in tree with right child!"),
@@ -1059,10 +969,10 @@ mod tests {
         tree.insert(1, 1);
 
         let three_node = tree.root().unwrap();
-        let five_node = three_node.right.unwrap();
-        let nine_node = unsafe { five_node.as_ref().right.unwrap() };
+        let five_node = three_node.right.0.unwrap();
+        let nine_node = unsafe { five_node.as_ref().right.0.unwrap() };
 
-        let nine_node_parent = unsafe { nine_node.as_ref().parent.unwrap() };
+        let nine_node_parent = unsafe { nine_node.as_ref().parent.0.unwrap() };
 
         assert_eq!(five_node, nine_node_parent);
     }
@@ -1079,10 +989,10 @@ mod tests {
         tree.insert(-1, -1);
 
         let three_node = tree.root().unwrap();
-        let five_node = three_node.left.unwrap();
-        let nine_node = unsafe { five_node.as_ref().left.unwrap() };
+        let five_node = three_node.left.0.unwrap();
+        let nine_node = unsafe { five_node.as_ref().left.0.unwrap() };
 
-        let nine_node_parent = unsafe { nine_node.as_ref().parent.unwrap() };
+        let nine_node_parent = unsafe { nine_node.as_ref().parent.0.unwrap() };
 
         assert_eq!(five_node, nine_node_parent);
     }
@@ -1105,32 +1015,32 @@ mod tests {
             tree.clone()
         };
 
-        let five_node = tree.root.unwrap();
+        let five_node = tree.root.0.unwrap();
 
         // Ensure root children are fixed
-        let three_node = unsafe { five_node.as_ref().left.unwrap() };
-        let three_node_parent = unsafe { three_node.as_ref().parent.unwrap() };
+        let three_node = unsafe { five_node.as_ref().left.0.unwrap() };
+        let three_node_parent = unsafe { three_node.as_ref().parent.0.unwrap() };
         assert_eq!(five_node, three_node_parent);
 
-        let seven_node = unsafe { five_node.as_ref().right.unwrap() };
-        let seven_node_parent = unsafe { seven_node.as_ref().parent.unwrap() };
+        let seven_node = unsafe { five_node.as_ref().right.0.unwrap() };
+        let seven_node_parent = unsafe { seven_node.as_ref().parent.0.unwrap() };
         assert_eq!(five_node, seven_node_parent);
 
         // Ensure deeper children are fixed
-        let one_node = unsafe { three_node.as_ref().left.unwrap() };
-        let one_node_parent = unsafe { one_node.as_ref().parent.unwrap() };
+        let one_node = unsafe { three_node.as_ref().left.0.unwrap() };
+        let one_node_parent = unsafe { one_node.as_ref().parent.0.unwrap() };
         assert_eq!(three_node, one_node_parent);
 
-        let four_node = unsafe { three_node.as_ref().right.unwrap() };
-        let four_node_parent = unsafe { four_node.as_ref().parent.unwrap() };
+        let four_node = unsafe { three_node.as_ref().right.0.unwrap() };
+        let four_node_parent = unsafe { four_node.as_ref().parent.0.unwrap() };
         assert_eq!(three_node, four_node_parent);
 
-        let six_node = unsafe { five_node.as_ref().left.unwrap() };
-        let six_node_parent = unsafe { six_node.as_ref().parent.unwrap() };
+        let six_node = unsafe { five_node.as_ref().left.0.unwrap() };
+        let six_node_parent = unsafe { six_node.as_ref().parent.0.unwrap() };
         assert_eq!(five_node, six_node_parent);
 
-        let eight_node = unsafe { five_node.as_ref().right.unwrap() };
-        let eight_node_parent = unsafe { eight_node.as_ref().parent.unwrap() };
+        let eight_node = unsafe { five_node.as_ref().right.0.unwrap() };
+        let eight_node_parent = unsafe { eight_node.as_ref().parent.0.unwrap() };
         assert_eq!(five_node, eight_node_parent);
 
         assert_eq!(tree.delete(&1), Some(1));
