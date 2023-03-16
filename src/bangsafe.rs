@@ -1208,6 +1208,7 @@ mod quicktests {
                 Op::Remove(k) => {
                     assert_eq!(bst.delete(k), map.remove(k));
                 }
+                Op::Iter => {}
             }
         }
     }
