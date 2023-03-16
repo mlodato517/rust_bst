@@ -36,6 +36,8 @@
 use std::cmp;
 use std::rc::Rc;
 
+use crate::util::DeleteResult;
+
 /// A Binary Search Tree. This can be used for inserting, finding,
 /// and deleting keys and values. Note that this data structure is
 /// immutable - operations that would modify the tree instead
@@ -142,9 +144,10 @@ impl<K, V> Tree<K, V> {
     where
         K: cmp::Ord,
     {
-        match &self.root {
-            None => Self::new(),
-            Some(n) => Self { root: n.delete(k) },
+        match self.root.as_ref().map(|root| root.delete(k)) {
+            Some(DeleteResult::DeleteSelf) => Self { root: None },
+            Some(DeleteResult::DeletedChild(child)) => Self { root: Some(child) },
+            None | Some(DeleteResult::NotFound) => self.clone(),
         }
     }
 
@@ -263,15 +266,17 @@ impl<K, V> Child<K, V> {
         }
     }
 
-    fn delete(&self, k: &K) -> Self
+    fn delete(&self, k: &K) -> DeleteResult<Self>
     where
         K: cmp::Ord,
     {
-        let new_node = match &self.0 {
-            Some(n) => n.delete(k).map(Rc::new),
-            None => None,
-        };
-        Self(new_node)
+        match self.0.as_ref().map(|n| n.delete(k)) {
+            Some(DeleteResult::DeleteSelf) => DeleteResult::DeletedChild(Self(None)),
+            Some(DeleteResult::DeletedChild(child)) => {
+                DeleteResult::DeletedChild(Self(Some(Rc::new(child))))
+            }
+            None | Some(DeleteResult::NotFound) => DeleteResult::NotFound,
+        }
     }
 }
 
@@ -366,43 +371,55 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    fn delete(&self, k: &K) -> Option<Self>
+    fn delete(&self, k: &K) -> DeleteResult<Self>
     where
         K: cmp::Ord,
     {
         match k.cmp(&self.key) {
-            cmp::Ordering::Less => {
-                let new_left = self.left.delete(k);
-                Some(self.clone_with_children(new_left, self.right.clone()))
-            }
-            cmp::Ordering::Equal => match (&self.left.0, &self.right.0) {
-                (None, None) => None,
-                (None, Some(right)) => Some(Node::clone(right)),
-                (Some(left), None) => Some(Node::clone(left)),
-
-                // If we have two children we have to figure out
-                // which node to promote. We choose here this node's
-                // predecessor. That is, the largest node in this node's
-                // left subtree.
-                (Some(left_child), _) => {
-                    let (pred_key, pred_val, new_left) = left_child.delete_largest();
-                    let height = new_left.height().max(self.right.height()) + 1;
-                    Some(
-                        Node {
-                            height,
-                            key: pred_key,
-                            left: new_left,
-                            right: self.right.clone(),
-                            value: pred_val,
-                        }
-                        .balance(),
-                    )
+            cmp::Ordering::Less => match self.left.delete(k) {
+                DeleteResult::DeleteSelf => {
+                    unreachable!("`Child::delete` doesn't return `DeleteSelf`")
                 }
+                DeleteResult::DeletedChild(new_left) => DeleteResult::DeletedChild(
+                    self.clone_with_children(new_left, self.right.clone()),
+                ),
+                DeleteResult::NotFound => DeleteResult::NotFound,
             },
-            cmp::Ordering::Greater => {
-                let new_right = self.right.delete(k);
-                Some(self.clone_with_children(self.left.clone(), new_right))
+            cmp::Ordering::Equal => {
+                match (&self.left.0, &self.right.0) {
+                    (None, None) => DeleteResult::DeleteSelf,
+                    (None, Some(right)) => DeleteResult::DeletedChild(Node::clone(right)),
+                    (Some(left), None) => DeleteResult::DeletedChild(Node::clone(left)),
+
+                    // If we have two children we have to figure out
+                    // which node to promote. We choose here this node's
+                    // predecessor. That is, the largest node in this node's
+                    // left subtree.
+                    (Some(left_child), _) => {
+                        let (pred_key, pred_val, new_left) = left_child.delete_largest();
+                        let height = new_left.height().max(self.right.height()) + 1;
+                        DeleteResult::DeletedChild(
+                            Node {
+                                height,
+                                key: pred_key,
+                                left: new_left,
+                                right: self.right.clone(),
+                                value: pred_val,
+                            }
+                            .balance(),
+                        )
+                    }
+                }
             }
+            cmp::Ordering::Greater => match self.right.delete(k) {
+                DeleteResult::DeleteSelf => {
+                    unreachable!("`Child::delete` doesn't return `DeleteSelf`")
+                }
+                DeleteResult::DeletedChild(new_right) => DeleteResult::DeletedChild(
+                    self.clone_with_children(self.left.clone(), new_right),
+                ),
+                DeleteResult::NotFound => DeleteResult::NotFound,
+            },
         }
     }
 
@@ -646,6 +663,21 @@ mod tests {
         assert_eq!(tree.find(&1), Some(&2));
         assert_eq!(tree.find(&2), None);
         assert_eq!(tree.find(&3), Some(&4));
+    }
+
+    #[test]
+    fn delete_miss_no_alloc() {
+        let mut tree = Tree::new();
+        tree = tree.insert(2, 3);
+        tree = tree.insert(1, 2);
+        tree = tree.insert(3, 4);
+        let tree = tree.delete(&100);
+
+        // We deleted 100 which is greater than the root, 2, so we should've gone right.
+        // Make sure we didn't allocate a new right child and only incremented the count.
+        let root = tree.root.as_ref().unwrap();
+        let right = root.right.0.as_ref().unwrap();
+        assert_eq!(Rc::strong_count(right), 2);
     }
 
     /// Assert the heights of the root, left child, and right child of a tree.

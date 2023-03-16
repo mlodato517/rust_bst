@@ -28,5 +28,7 @@
 pub mod bangsafe;
 pub mod immutable;
 
+pub(crate) mod util;
+
 #[cfg(test)]
 mod test;
