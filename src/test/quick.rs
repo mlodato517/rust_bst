@@ -8,6 +8,8 @@ pub(crate) enum Op<K, V> {
     Insert(K, V),
     /// Remove the K from the data structure
     Remove(K),
+    /// Compare iterators
+    Iter,
 }
 
 impl<K, V> Arbitrary for Op<K, V>
@@ -17,9 +19,10 @@ where
 {
     /// Tells quickcheck how to randomly choose an operation
     fn arbitrary(g: &mut Gen) -> Self {
-        match g.choose(&[0, 1]).unwrap() {
+        match g.choose(&[0, 1, 2]).unwrap() {
             0 => Op::Insert(K::arbitrary(g), V::arbitrary(g)),
             1 => Op::Remove(K::arbitrary(g)),
+            2 => Op::Iter,
             _ => unreachable!(),
         }
     }

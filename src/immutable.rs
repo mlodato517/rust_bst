@@ -147,6 +147,81 @@ impl<K, V> Tree<K, V> {
             Some(n) => Self { root: n.delete(k) },
         }
     }
+
+    /// Returns an in-order iterator over the key-value pairs of the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bst::immutable::Tree;
+    ///
+    /// let mut tree = Tree::new();
+    /// tree = tree.insert(9, 8);
+    /// tree = tree.insert(7, 6);
+    /// tree = tree.insert(5, 4);
+    /// tree = tree.insert(3, 2);
+    /// tree = tree.insert(1, 0);
+    ///
+    /// let expected = [(&1, &0), (&3, &2), (&5, &4), (&7, &6), (&9, &8)];
+    /// assert!(tree.iter().eq(expected));
+    /// ```
+    pub fn iter(&self) -> Iter<K, V> {
+        match self.root.as_ref() {
+            Some(root) => Iter {
+                parents: vec![root.into()],
+            },
+            None => Iter {
+                parents: Vec::new(),
+            },
+        }
+    }
+}
+
+/// An `Iterator` over references to key value pairs of a Tree. See [`Tree::iter`] for more
+/// details.
+pub struct Iter<'a, K, V> {
+    // TODO After seeing the Nomicon I realized the `VecDeque` is probably for
+    // `DoubleEndedIterator`. We should try that later.
+    parents: Vec<IterNode<'a, K, V>>,
+}
+
+struct IterNode<'a, K, V> {
+    curr: &'a Node<K, V>,
+    left: Option<&'a Node<K, V>>,
+    right: Option<&'a Node<K, V>>,
+}
+
+impl<'a, K, V> From<&'a Node<K, V>> for IterNode<'a, K, V> {
+    fn from(node: &'a Node<K, V>) -> Self {
+        Self {
+            curr: node,
+            left: node.left.0.as_deref(),
+            right: node.right.0.as_deref(),
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = loop {
+            match self.parents.pop() {
+                None => break None,
+                Some(mut parent) => {
+                    if let Some(left) = parent.left.take() {
+                        self.parents.push(parent);
+                        self.parents.push(left.into());
+                        continue;
+                    } else if let Some(right) = parent.right.take() {
+                        self.parents.push(right.into());
+                    }
+                    break Some(parent.curr);
+                }
+            }
+        };
+        next.map(|node| (&*node.key, &*node.value))
+    }
 }
 
 struct Child<K, V>(Option<Rc<Node<K, V>>>);
@@ -635,19 +710,70 @@ mod tests {
 
         assert_heights!(tree, 2, 1, 1);
     }
+
+    #[test]
+    fn iter() {
+        let mut tree = Tree::new();
+        assert_eq!(tree.iter().count(), 0);
+
+        tree = tree.insert(5, 6);
+
+        let nodes: Vec<_> = tree.iter().collect();
+        assert_eq!(nodes, [(&5, &6)]);
+
+        tree = tree.insert(3, 4);
+
+        let nodes: Vec<_> = tree.iter().collect();
+        assert_eq!(nodes, [(&3, &4), (&5, &6)]);
+
+        tree = tree.insert(7, 8);
+
+        let nodes: Vec<_> = tree.iter().collect();
+        assert_eq!(nodes, [(&3, &4), (&5, &6), (&7, &8)]);
+
+        tree = tree.insert(1, 2);
+        tree = tree.insert(4, 5);
+        tree = tree.insert(6, 7);
+        tree = tree.insert(8, 9);
+
+        let nodes: Vec<_> = tree.iter().collect();
+        assert_eq!(
+            nodes,
+            [
+                (&1, &2),
+                (&3, &4),
+                (&4, &5),
+                (&5, &6),
+                (&6, &7),
+                (&7, &8),
+                (&8, &9)
+            ]
+        );
+    }
+
+    #[test]
+    fn quickcheck_iter() {
+        let mut tree = Tree::new();
+
+        tree = tree.insert(-120, 62);
+        tree = tree.insert(46, 122);
+
+        let nodes: Vec<_> = tree.iter().collect();
+        assert_eq!(nodes, [(&-120, &62), (&46, &122)]);
+    }
 }
 
 #[cfg(test)]
 mod quicktests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, HashSet};
 
     use super::*;
     use crate::test::quick::Op;
 
-    /// Applies a set of operations to a tree and a hashmap.
+    /// Applies a set of operations to our tree and std's tree.
     /// This way we can ensure that after a random smattering of inserts
     /// and deletes we have the same set of keys in the map.
-    fn do_ops<K, V>(ops: &[Op<K, V>], mut bst: Tree<K, V>, map: &mut HashMap<K, V>) -> Tree<K, V>
+    fn do_ops<K, V>(ops: &[Op<K, V>], mut bst: Tree<K, V>, map: &mut BTreeMap<K, V>) -> Tree<K, V>
     where
         K: std::hash::Hash + Eq + Clone + Ord,
         V: std::fmt::Debug + PartialEq + Clone,
@@ -662,6 +788,9 @@ mod quicktests {
                     bst = bst.delete(k);
                     map.remove(k);
                 }
+                Op::Iter => {
+                    assert!(bst.iter().eq(map.iter()));
+                }
             }
         }
 
@@ -671,7 +800,7 @@ mod quicktests {
     quickcheck::quickcheck! {
         fn fuzz_multiple_operations_i8(ops: Vec<Op<i8, i8>>) -> bool {
             let mut tree = Tree::new();
-            let mut map = HashMap::new();
+            let mut map = BTreeMap::new();
 
             tree = do_ops(&ops, tree, &mut map);
             map.keys().all(|key| tree.find(key) == map.get(key))
